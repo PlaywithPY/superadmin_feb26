@@ -25,6 +25,18 @@ import requests
 BACKEND_URL = "https://sqea-backend.onrender.com"
 LOCAL_CALLBACK_PORT = 8765  # Port pour le callback OAuth local
 
+# Couleurs par rareté (utilisé dans plusieurs onglets)
+RARITY_COLORS = {
+    "common": "#8b949e",
+    "uncommon": "#58a6ff",
+    "rare": "#b45fff",
+    "epic": "#ffa726",
+    "legendary": "#ff6b6b",
+    "Objet de Quête": "#3fb950",
+    "Objet de Quête Épique": "#b45fff",
+    "Objet de Quête Légendaire": "#ffa726"
+}
+
 
 # Obtenir le chemin du script actuel
 script_dir = Path(__file__).parent
@@ -3499,14 +3511,7 @@ class EventTab(QWidget):
                 effets = item.get('effets', [])
                 
                 # Couleur selon la rareté
-                rarity_colors = {
-                    "common": "#8b949e",
-                    "uncommon": "#58a6ff", 
-                    "rare": "#b45fff",
-                    "epic": "#ffa726",
-                    "legendary": "#ff6b6b"
-                }
-                color = rarity_colors.get(rarete, "#8b949e")
+                color = RARITY_COLORS.get(rarete, "#8b949e")
                 
                 # Afficher un élément par effet
                 for effet in effets:
@@ -5398,13 +5403,7 @@ class CoffreTab(QWidget):
             quantite = item.get('quantite', 1)
             
             # Couleur selon la rareté
-            rarity_colors = {
-                "common": "#8b949e", "uncommon": "#58a6ff", "rare": "#b45fff",
-                "epic": "#ffa726", "legendary": "#ff6b6b",
-                "Objet de Quête": "#3fb950", "Objet de Quête Épique": "#b45fff"
-            }
-            
-            color = rarity_colors.get(rarity, "#8b949e")
+            color = RARITY_COLORS.get(rarity, "#8b949e")
             
             item_text = f"📦 {name} ×{quantite} ({rarity})"
             item_widget = QListWidgetItem(item_text)
@@ -6199,8 +6198,9 @@ class BossTab(QWidget):
                 full_url = f"{self.api_client.backend_url}{image_url}"
             else:
                 full_url = image_url
-            
-            response = self.api_client.client.get(full_url, timeout=10.0)
+
+            # Utiliser httpx.get() directement pour les URLs externes
+            response = httpx.get(full_url, timeout=10.0, follow_redirects=True)
             if response.status_code == 200:
                 pixmap = QPixmap()
                 pixmap.loadFromData(response.content)
@@ -6653,27 +6653,27 @@ class ItemsTab(QWidget):
         if not image_url:
             self.clear_image()
             return
-            
+
         try:
-            # Pour Cloudinary, l'URL est directement utilisable
-            # On peut afficher un indicateur que l'image est chargée depuis le cloud
             self.image_preview.setText("🔄 Chargement depuis le cloud...")
-            
-            # Télécharger l'image depuis Cloudinary
-            response = self.api_client.client.get(image_url, timeout=10.0)
+
+            # Utiliser httpx.get() directement pour les URLs externes (Cloudinary)
+            # car self.api_client.client a un base_url qui interfère
+            response = httpx.get(image_url, timeout=10.0, follow_redirects=True)
             if response.status_code == 200:
                 pixmap = QPixmap()
                 pixmap.loadFromData(response.content)
-                
+
                 if not pixmap.isNull():
                     scaled_pixmap = pixmap.scaled(200, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self.image_preview.setPixmap(scaled_pixmap)
                     print(f"✅ Image Cloudinary chargée: {image_url}")
                 else:
-                    self.clear_image()
+                    self.image_preview.setText("⚠️ Image corrompue")
             else:
+                print(f"⚠️ Image non trouvée: HTTP {response.status_code}")
                 self.clear_image()
-                
+
         except Exception as e:
             print(f"❌ Erreur chargement image Cloudinary: {e}")
             self.clear_image()
@@ -6702,19 +6702,11 @@ class ItemsTab(QWidget):
             self.load_items_fallback()
 
     def load_items_fallback(self):
-        """Méthode de fallback pour charger les items"""
-        try:
-            data = self.api_client._make_request("GET", "/coffre-commu")
-            if data and "coffre" in data:
-                self.all_items = data["coffre"]
-            else:
-                self.all_items = []
-                
-            self.display_items(self.all_items)
-        except:
-            self.all_items = []
-            self.items_list.clear()
-            self.items_list.addItem("❌ Impossible de charger les items")
+        """Affiche un message d'erreur propre quand le chargement échoue"""
+        self.all_items = []
+        self.items_list.clear()
+        self.items_list.addItem("❌ Impossible de charger les items")
+        self.items_list.addItem("🔄 Cliquez sur Actualiser ou changez d'onglet pour réessayer")
 
     def display_items(self, items):
         """Affiche la liste des items"""
@@ -6729,18 +6721,7 @@ class ItemsTab(QWidget):
             has_image = bool(item.get('image_url'))
             
             # Couleur selon la rareté
-            rarity_colors = {
-                "common": "#8b949e",
-                "uncommon": "#58a6ff", 
-                "rare": "#b45fff",
-                "epic": "#ffa726",
-                "legendary": "#ff6b6b",
-                "Objet de Quête": "#3fb950",
-                "Objet de Quête Épique": "#b45fff",
-                "Objet de Quête Légendaire": "#ffa726"
-            }
-            
-            color = rarity_colors.get(rarity, "#8b949e")
+            color = RARITY_COLORS.get(rarity, "#8b949e")
             stackable_icon = "📦" if stackable else "📎"
             group_icon = "👥" if is_group_reward else "👤"
             image_icon = "🖼️" if has_image else "📷"
@@ -7725,6 +7706,9 @@ class StreamQuestAdmin(QMainWindow):
         self.tabs.addTab(self.overlay_tab, "🎬 Overlay")
         
 
+        # Auto-refresh quand on change d'onglet
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
         main_layout.addWidget(self.tabs)
 
         # Barre d'état
@@ -7770,6 +7754,27 @@ class StreamQuestAdmin(QMainWindow):
         self.api_client.load_cookies()
         # Vérifier la session après un court délai
         QTimer.singleShot(1000, self.check_session)
+
+    def on_tab_changed(self, index):
+        """Rafraîchit les données de l'onglet quand on y accède"""
+        widget = self.tabs.widget(index)
+        if widget is self.lore_tab:
+            self.lore_tab.load_lore_data()
+        elif widget is self.event_tab:
+            self.event_tab.refresh_data()
+        elif widget is self.missions_tab:
+            self.missions_tab.refresh_defs()
+            self.missions_tab.refresh_runs()
+        elif widget is self.boss_tab:
+            self.boss_tab.load_boss_list()
+        elif widget is self.items_tab:
+            self.items_tab.refresh_items()
+        elif widget is self.item_effects_tab:
+            self.item_effects_tab.refresh_data()
+        elif widget is self.coffre_tab:
+            self.coffre_tab.load_coffre()
+        elif widget is self.overlay_tab:
+            self.overlay_tab.load_config()
 
     def check_connection(self):
         is_online = self.api_client.check_connectivity()
