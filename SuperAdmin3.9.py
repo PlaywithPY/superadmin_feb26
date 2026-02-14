@@ -306,36 +306,8 @@ class SSEThread(QThread):
                 print(f"❌ Erreur SSE: {e}")
                 break
 
-    def handle_sse_event(self, event_type, data):
-        print(f"📨 Événement SSE: {event_type} - {data}")
-        
-        # Vérifier spécifiquement les événements overlay
-        if event_type == "overlay_config":
-            print("🎬 Événement de configuration overlay reçu")
-            
-        if event_type == "event_update":
-            self.event_tab.refresh_data()
-        elif event_type == "solo_update":
-            self.solo_tab.refresh_defs()
-            self.solo_tab.refresh_runs()
-            
-    def check_overlay_endpoints(self):
-        """Vérifier que les endpoints overlay fonctionnent"""
-        endpoints = [
-            "/admin/overlay/config",
-            "/events"
-        ]
-        
-        for endpoint in endpoints:
-            try:
-                response = self.client.get(endpoint)
-                print(f"🔍 {endpoint}: {response.status_code}")
-                if response.status_code != 200:
-                    print(f"   Contenu: {response.text}")
-            except Exception as e:
-                print(f"❌ {endpoint}: {e}")
 
-# Section 3: Client API (inchangé)
+# Section 3: Client API
 class APIClient:
     """Client pour interagir avec l'API backend avec JWT"""
 
@@ -351,18 +323,28 @@ class APIClient:
         self.debug_info = {}
         self.jwt_token = None  # Stocke le JWT
         self.is_online = False
+        # Cache avec TTL pour réduire les appels API répétitifs
+        self._cache = {}  # {endpoint: (data, timestamp)}
 
     def set_auth_callback(self, callback):
         self.auth_callback = callback
 
     def check_connectivity(self):
-        """Vérifie si le backend est accessible"""
+        """Vérifie si le backend est accessible (avec cache de 10s)"""
+        now = time.time()
+        cache_key = "__connectivity__"
+        if cache_key in self._cache:
+            _, ts = self._cache[cache_key]
+            if now - ts < 10:
+                return self.is_online
         try:
             response = self.client.get("/", timeout=5.0)
             self.is_online = response.status_code < 500
+            self._cache[cache_key] = (self.is_online, now)
             return self.is_online
         except Exception:
             self.is_online = False
+            self._cache[cache_key] = (False, now)
             return False
 
     def whoami(self):
@@ -512,6 +494,11 @@ class APIClient:
         self.save_cookies()
         print("✅ Déconnecté")
 
+    # Endpoints polled frequently - no need to log them every time
+    _quiet_endpoints = {"/admin/event/status", "/admin/event/malus-total",
+                        "/admin/config/MISSION_COOLDOWN_SEC", "/admin/participants/active-count",
+                        "/public/coffre/items", "/"}
+
     def _make_request(self, method, endpoint, **kwargs):
         """Méthode générique pour les requêtes API avec JWT"""
         try:
@@ -519,31 +506,28 @@ class APIClient:
             if self.jwt_token:
                 headers['Authorization'] = f'Bearer {self.jwt_token}'
 
-            print(f"🔍 API Request: {method} {endpoint}")
+            verbose = endpoint not in self._quiet_endpoints
+            if verbose:
+                print(f"🔍 API Request: {method} {endpoint}")
+
             response = self.client.request(
                 method, endpoint,
                 headers=headers,
                 **kwargs
             )
 
-            print(f"📡 Response status: {response.status_code}")
-            
             if response.status_code == 401:
                 print(f"🔒 Accès non autorisé - JWT expiré ou invalide")
                 self.jwt_token = None
                 return None
             elif response.status_code >= 400:
                 print(f"⚠️  Erreur {response.status_code} sur {endpoint}")
-                print(f"📄 Response text: {response.text}")
                 return {"error": f"HTTP {response.status_code}", "message": response.text}
 
-            # Essayer de parser JSON, sinon retourner le texte
             try:
                 result = response.json() if response.content else {}
-                print(f"✅ JSON response: {result}")
                 return result
             except json.JSONDecodeError:
-                print(f"📄 Text response: {response.text}")
                 return response.text
 
         except httpx.RequestError as e:
@@ -585,25 +569,45 @@ class APIClient:
         """Vérifie et attend que la connexion soit rétablie si nécessaire"""
         if not self.is_online:
             print("📡 Tentative de reconnexion...")
-            # Attendre un peu avant de réessayer
             time.sleep(2)
             return self.check_connectivity()
         return True
+
+    def _cached_get(self, endpoint, cache_ttl=10):
+        """GET avec cache TTL - évite les appels répétitifs pour des données qui changent peu"""
+        now = time.time()
+        if endpoint in self._cache:
+            data, ts = self._cache[endpoint]
+            if now - ts < cache_ttl:
+                return data
+        result = self._make_request("GET", endpoint)
+        if result is not None and not (isinstance(result, dict) and "error" in result):
+            self._cache[endpoint] = (result, now)
+        return result
+
+    def invalidate_cache(self, endpoint=None):
+        """Invalide le cache (tout ou un endpoint spécifique)"""
+        if endpoint:
+            self._cache.pop(endpoint, None)
+        else:
+            self._cache.clear()
+
     # Toutes les méthodes API restent les mêmes
     def get_event_status(self):
-        return self._make_request("GET", "/admin/event/status")
+        return self._cached_get("/admin/event/status", cache_ttl=3)
 
     def save_event(self, event_data):
         """Sauvegarde un événement"""
-        print(f"📤 Envoi des données événement: {json.dumps(event_data, indent=2)}")
+        self.invalidate_cache("/admin/event/status")
+        self.invalidate_cache("/admin/event/malus-total")
         return self._make_request("POST", "/admin/event/set", json=event_data)
 
     def event_action(self, action, data=None):
         """Exécute une action sur l'événement avec données optionnelles"""
+        self.invalidate_cache("/admin/event/status")
+        self.invalidate_cache("/admin/event/malus-total")
         if data is None:
             data = {}
-        
-        # Pour l'annulation avec raison
         if action == "cancel" and "cancel_reason" in data:
             return self._make_request("POST", f"/admin/event/{action}", json=data)
         else:
@@ -622,34 +626,14 @@ class APIClient:
         return self._make_request("GET", "/admin/solo/list") or {"runs": []}
 
     def get_overlay_config(self):
-        """Récupère la configuration overlay avec le nouveau format"""
-        print("📋 Tentative de récupération de la configuration overlay")
-        result = self._make_request("GET", "/admin/overlay/config")
-        if result:
-            print(f"✅ Configuration reçue: {json.dumps(result, indent=2)}")
-        else:
-            print("❌ Aucune configuration reçue")
-        # Retourne le format par défaut pour le nouveau design
+        """Récupère la configuration overlay"""
+        result = self._cached_get("/admin/overlay/config", cache_ttl=30)
         return result or {"widgets": {}, "options": {}}
 
     def save_overlay_config(self, config):
-        """Sauvegarde la configuration overlay avec le nouveau format"""
-        print(f"💾 Sauvegarde configuration overlay (nouveau format): {json.dumps(config, indent=2)}")
-        result = self._make_request("POST", "/admin/overlay/config", json=config)
-        if result:
-            print(f"✅ Réponse du serveur: {json.dumps(result, indent=2)}")
-        else:
-            print("❌ Aucune réponse du serveur")
-        return result
-    
-    def get_overlay_config(self):
-        print("📋 Tentative de récupération de la configuration overlay")
-        result = self._make_request("GET", "/admin/overlay/config")
-        if result:
-            print(f"✅ Configuration reçue: {json.dumps(result, indent=2)}")
-        else:
-            print("❌ Aucune configuration reçue")
-        return result or {"blocks": {}, "options": {}}  
+        """Sauvegarde la configuration overlay"""
+        self.invalidate_cache("/admin/overlay/config")
+        return self._make_request("POST", "/admin/overlay/config", json=config)  
     def test_connectivity(self):
         """Teste la connectivité avec tous les endpoints"""
         endpoints = [
@@ -685,15 +669,19 @@ class APIClient:
 
     def get_event_types(self):
         """Récupère les types d'événements disponibles"""
-        return self._make_request("GET", "/admin/event-types")
+        return self._cached_get("/admin/event-types", cache_ttl=300)
 
     def get_effect_types(self):
         """Récupère les types d'effets disponibles"""
-        return self._make_request("GET", "/admin/effect-types")
+        return self._cached_get("/admin/effect-types", cache_ttl=300)
 
     def get_all_items(self):
         """Récupère tous les items"""
-        return self._make_request("GET", "/admin/items")
+        return self._cached_get("/admin/items", cache_ttl=30)
+
+    def invalidate_items_cache(self):
+        """Invalide le cache des items après modification"""
+        self.invalidate_cache("/admin/items")
     def get_active_effects_for_event(api_client, event_type: str):
         """Récupère les effets actifs pour un type d'événement"""
         try:
@@ -712,7 +700,7 @@ class APIClient:
    
     def get_malus_total(self):
         """Récupère le malus total des événements échoués"""
-        return self._make_request("GET", "/admin/event/malus-total")
+        return self._cached_get("/admin/event/malus-total", cache_ttl=20)
         
     def upload_item_image(self, item_code, image_path):
         """Upload réel d'une image vers le serveur"""
@@ -755,7 +743,7 @@ class APIClient:
         """Supprime l'image d'un item"""
         return self._make_request("DELETE", f"/admin/items/{item_code}/image")
     def get_all_boss(self):
-        return self._make_request("GET", "/admin/boss")
+        return self._cached_get("/admin/boss", cache_ttl=30)
 
     def get_boss(self, boss_id):
         return self._make_request("GET", f"/admin/boss/{boss_id}")
@@ -764,9 +752,11 @@ class APIClient:
         return self._make_request("GET", "/admin/boss/current")
 
     def upsert_boss(self, boss_data):
+        self.invalidate_cache("/admin/boss")
         return self._make_request("POST", "/admin/boss/upsert", json=boss_data)
 
     def delete_boss(self, boss_id):
+        self.invalidate_cache("/admin/boss")
         return self._make_request("DELETE", f"/admin/boss/{boss_id}")
 
     def upload_boss_image(self, boss_id, image_path):
@@ -838,29 +828,6 @@ class APIClient:
             print(f"❌ Erreur upload son: {e}")
             return None
 
-    def delete_boss_sound(self, boss_id, sound_type):
-        """Supprime un son de boss"""
-        try:
-            headers = {}
-            if self.jwt_token:
-                headers['Authorization'] = f'Bearer {self.jwt_token}'
-            
-            response = self.client.delete(
-                f"{self.backend_url}/admin/boss/{boss_id}/sound/{sound_type}",
-                headers=headers,
-                timeout=10.0
-            )
-            
-            if response.status_code == 200:
-                print(f"✅ Son {sound_type} supprimé pour le boss {boss_id}")
-                return response.json()
-            else:
-                print(f"❌ Erreur suppression son: {response.status_code} - {response.text}")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Erreur suppression son: {e}")
-            return None
 
 # Section 4: Composants UI améliorés
 class DraggableBlock(QFrame):
@@ -2425,26 +2392,24 @@ class EventTab(QWidget):
         self.active_adventurers_count = 0
         
         self.init_ui()
-        
-        # Timer pour rafraîchir les données et le décompte
+
+        # Timer RAPIDE: uniquement event_status (léger) - toutes les 5s
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_data)
-        self.refresh_timer.start(5000)  # 5 secondes
-        
-        # Timer pour le décompte en temps réel (1 seconde)
+        self.refresh_timer.start(5000)
+
+        # Timer pour le décompte en temps réel (1 seconde) - local, pas d'API
         self.countdown_timer = QTimer()
         self.countdown_timer.timeout.connect(self.update_countdown)
         self.countdown_timer.start(1000)
-        
-        # Timer pour rafraîchir les effets du coffre (toutes les 30 secondes)
-        self.coffre_refresh_timer = QTimer()
-        self.coffre_refresh_timer.timeout.connect(self.load_active_effects_from_coffre)
-        self.coffre_refresh_timer.start(30000)  # 30 secondes
-    
-        # Timer pour rafraîchir les aventuriers actifs toutes les 30 secondes
-        self.adventurers_timer = QTimer()
-        self.adventurers_timer.timeout.connect(self.update_active_adventurers)
-        self.adventurers_timer.start(30000)  # 30 secondes
+
+        # Timer LENT: config, malus, coffre, aventuriers - toutes les 30s
+        self.slow_refresh_timer = QTimer()
+        self.slow_refresh_timer.timeout.connect(self.slow_refresh)
+        self.slow_refresh_timer.start(30000)
+
+        # Chargement initial des données lentes (différé pour ne pas bloquer le démarrage)
+        QTimer.singleShot(500, self.slow_refresh)
                 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -3013,8 +2978,10 @@ class EventTab(QWidget):
     def toggle_auto_refresh(self, state):
         if state == Qt.Checked:
             self.refresh_timer.start(5000)
+            self.slow_refresh_timer.start(30000)
         else:
             self.refresh_timer.stop()
+            self.slow_refresh_timer.stop()
 
     def generate_code(self):
         """Génère un code automatique basé sur le type sélectionné"""
@@ -3092,14 +3059,20 @@ class EventTab(QWidget):
         except Exception as e:
             print(f"Erreur mise à jour décompte: {e}")
 
+    def slow_refresh(self):
+        """Rafraîchit les données lourdes (config, malus, coffre, aventuriers) - appelé toutes les 30s"""
+        if not self.api_client.is_online:
+            return
+        self.load_config_values()
+        self.load_malus_total()
+        self.load_active_effects_from_coffre()
+
     def refresh_data(self):
-        """Rafraîchit les données de l'événement"""
+        """Rafraîchit les données de l'événement (léger - appelé toutes les 5s)"""
         if not self.api_client.is_online:
             if not self.api_client.check_connectivity():
                 self.status_label.setText("🌐 Déconnecté - Reconnexion...")
                 return
-        # Charger la configuration et les aventuriers actifs
-        self.load_config_values()
 
         data = self.api_client.get_event_status()
 
@@ -3185,12 +3158,6 @@ class EventTab(QWidget):
             self.status_label.setText("📭 Aucun événement")
             self.reset_display()
 
-        # CHARGEMENT DU MALUS TOTAL
-        self.load_malus_total()
-        
-        # CHARGEMENT DES EFFETS ACTIFS DU COFFRE
-        self.load_active_effects_from_coffre()
-        
         # Mise à jour du top
         self.contrib_list.clear()
         for i, contrib in enumerate(top[:5]):
@@ -3202,12 +3169,10 @@ class EventTab(QWidget):
     def load_malus_total(self):
         """Charge le malus total des événements échoués"""
         try:
-            print("🔍 Chargement du malus total...")
-            data = self.api_client._make_request("GET", "/admin/event/malus-total")
+            data = self.api_client.get_malus_total()
             
             if data and "error" not in data:
                 total_malus = data.get("total_malus", 0)
-                print(f"✅ Malus total chargé: {total_malus} XP")
                 
                 # Formater le texte avec séparateurs de milliers
                 malus_text = f"{total_malus:,} XP".replace(',', ' ')
@@ -3490,10 +3455,8 @@ class EventTab(QWidget):
     def load_active_effects_from_coffre(self):
         """Charge les effets actifs disponibles depuis le coffre communautaire"""
         try:
-            print("📦 Chargement des effets actifs du coffre...")
-            
-            # Récupérer les données du coffre
-            coffre_data = self.api_client._make_request("GET", "/public/coffre/items")
+            # Récupérer les données du coffre (avec cache 20s)
+            coffre_data = self.api_client._cached_get("/public/coffre/items", cache_ttl=20)
             
             if not coffre_data or "success" not in coffre_data or not coffre_data["success"]:
                 print("❌ Impossible de charger les données du coffre")
@@ -3627,17 +3590,15 @@ class EventTab(QWidget):
         """)      
         
     def load_config_values(self):
-        """Charge les valeurs de configuration depuis le backend"""
+        """Charge les valeurs de configuration depuis le backend (avec cache)"""
         try:
-            # Récupérer MISSION_COOLDOWN_SEC
-            cooldown_result = self.api_client._make_request("GET", "/admin/config/MISSION_COOLDOWN_SEC")
+            # Récupérer MISSION_COOLDOWN_SEC (cache 60s - change rarement)
+            cooldown_result = self.api_client._cached_get("/admin/config/MISSION_COOLDOWN_SEC", cache_ttl=60)
             if cooldown_result and cooldown_result.get("success"):
                 self.mission_cooldown = int(cooldown_result.get("value", 30))
-                print(f"⏱️ Cooldown chargé: {self.mission_cooldown} secondes")
             else:
                 self.mission_cooldown = 30
-                print(f"⚠️ Cooldown non trouvé, utilisation de {self.mission_cooldown}s par défaut")
-                
+
             # Récupérer le nombre d'aventuriers actifs
             self.update_active_adventurers()
             
@@ -3647,9 +3608,9 @@ class EventTab(QWidget):
             self.active_adventurers_count = 0
 
     def update_active_adventurers(self):
-        """Met à jour le compteur d'aventuriers actifs"""
+        """Met à jour le compteur d'aventuriers actifs (cache 15s)"""
         try:
-            result = self.api_client._make_request("GET", "/admin/participants/active-count")
+            result = self.api_client._cached_get("/admin/participants/active-count", cache_ttl=15)
             
             if result and result.get("success"):
                 counts = result.get("counts", {})
@@ -5402,7 +5363,7 @@ class CoffreTab(QWidget):
             self.status_label.setText("🔄 Chargement...")
             self.coffre_list.clear()
             
-            data = self.api_client._make_request("GET", "/admin/coffre/items")
+            data = self.api_client._cached_get("/admin/coffre/items", cache_ttl=30)
             
             if data and "success" in data and not data["success"]:
                 error_msg = data.get("error", "Erreur inconnue")
@@ -6176,7 +6137,6 @@ class BossTab(QWidget):
         self.current_sounds = {}
         self.clear_form()
         self.clear_boss_image()
-        self.mission_success_rate.setValue(100)  
         # Réinitialiser les sons
         for sound_type in ['cri_guerre', 'cri_douleur_25', 'cri_douleur_50', 'cri_douleur_75', 'cri_agonie']:
             self.clear_boss_sound(sound_type)
@@ -6357,135 +6317,6 @@ class BossTab(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Erreur", f"Erreur: {str(e)}")
     
-    def upload_boss_image(self, boss_id, image_path):
-        """Upload une image pour un boss"""
-        try:
-            with open(image_path, 'rb') as f:
-                files = {'image': (os.path.basename(image_path), f, 'image/jpeg')}
-                
-                headers = {}
-                if self.jwt_token:
-                    headers['Authorization'] = f'Bearer {self.jwt_token}'
-                
-                response = self.client.post(
-                    f"{self.backend_url}/admin/boss/{boss_id}/upload-image",
-                    files=files,
-                    headers=headers,
-                    timeout=30.0
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    return result.get('image_url')
-                else:
-                    print(f"❌ Erreur upload image: {response.status_code} - {response.text}")
-                    return None
-                    
-        except Exception as e:
-            print(f"❌ Erreur upload image: {e}")
-            return None                
-    def upsert_boss(self, boss_data):
-        """Crée ou met à jour un boss (mise à jour partielle)"""
-        try:
-            headers = {}
-            if self.jwt_token:
-                headers['Authorization'] = f'Bearer {self.jwt_token}'
-            
-            # Ne pas envoyer les champs vides pour éviter de les mettre à NULL
-            cleaned_data = {k: v for k, v in boss_data.items() if v is not None and v != ''}
-            
-            response = self.client.post(
-                f"{self.backend_url}/admin/boss/upsert",
-                json=cleaned_data,
-                headers=headers,
-                timeout=30.0
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                print(f"❌ Erreur upsert boss: {response.status_code} - {response.text}")
-                return {"error": f"Erreur {response.status_code}"}
-                
-        except Exception as e:
-            print(f"❌ Erreur upsert boss: {e}")
-            return {"error": str(e)}
-    def start_boss_defeat_listener(self):
-        """Démarre l'écoute des événements de défaite de boss"""
-        def listen_for_boss_defeat():
-            try:
-                url = f"{self.api_client.backend_url}/sse/boss-defeated"
-                response = requests.get(url, stream=True, timeout=30)
-                
-                for line in response.iter_lines():
-                    if line:
-                        line_str = line.decode('utf-8')
-                        if line_str.startswith('event: boss_defeated'):
-                            # Parse l'événement
-                            import json
-                            data_line = next(response.iter_lines()).decode('utf-8')
-                            if data_line.startswith('data: '):
-                                data = json.loads(data_line[6:])
-                                
-                                # Jouer le son d'agonie
-                                agony_sound = data.get('agony_sound')
-                                if agony_sound:
-                                    QMetaObject.invokeMethod(self, "play_agony_sound", 
-                                                           Qt.QueuedConnection,
-                                                           Q_ARG(str, agony_sound))
-                                
-                                # Cacher la HUD après 3 secondes
-                                QTimer.singleShot(3000, self.hide_boss_hud)
-                                
-            except Exception as e:
-                print(f"❌ Erreur écouteur boss défait: {e}")
-        
-        # Démarrer dans un thread séparé
-        import threading
-        thread = threading.Thread(target=listen_for_boss_defeat, daemon=True)
-        thread.start()
-
-    @Slot(str)
-    def play_agony_sound(self, sound_url):
-        """Joue le son d'agonie"""
-        try:
-            print(f"🎵 Jouer son d'agonie: {sound_url}")
-            
-            # Télécharger temporairement le son
-            import tempfile
-            response = requests.get(sound_url, timeout=10)
-            
-            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp_file:
-                tmp_file.write(response.content)
-                tmp_path = tmp_file.name
-                
-                # Jouer avec un lecteur système
-                import platform
-                system = platform.system()
-                
-                if system == "Windows":
-                    os.system(f'start wmplayer "{tmp_path}"')
-                elif system == "Darwin":  # macOS
-                    os.system(f'afplay "{tmp_path}"')
-                else:  # Linux
-                    os.system(f'xdg-open "{tmp_path}"')
-                    
-        except Exception as e:
-            print(f"❌ Erreur lecture son agonie: {e}")
-
-    def hide_boss_hud(self):
-        """Cache la HUD du boss"""
-        try:
-            # Votre logique pour cacher la HUD
-            self.current_boss_group.hide()
-            self.current_boss_info.setText("🎯 Aucun boss en cours de combat")
-            
-            # Rafraîchir la liste des boss
-            self.load_boss_list()
-            
-            print("✅ HUD boss cachée")
-        except Exception as e:
-            print(f"❌ Erreur cacher HUD boss: {e}")
     def start_boss_sse_listener(self):
         """Démarre l'écoute des événements SSE pour les boss"""
         def listen_for_events():
@@ -6857,7 +6688,8 @@ class ItemsTab(QWidget):
     def refresh_items(self):
         """Charge tous les items depuis l'API"""
         try:
-            data = self.api_client._make_request("GET", "/admin/items")
+            self.api_client.invalidate_items_cache()
+            data = self.api_client.get_all_items()
             
             if data and "error" not in data:
                 self.all_items = data.get("items", [])
@@ -7899,10 +7731,10 @@ class StreamQuestAdmin(QMainWindow):
         status_bar = self.statusBar()
         status_bar.showMessage("Prêt")
 
-        # Timer pour vérifier la connexion
+        # Timer pour vérifier la connexion (30s au lieu de 5s - le cache gère les appels intermédiaires)
         self.connection_timer = QTimer()
         self.connection_timer.timeout.connect(self.check_connection)
-        self.connection_timer.start(5000)
+        self.connection_timer.start(30000)
 
         # Menu
         self.setup_menu()
