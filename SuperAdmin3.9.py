@@ -3779,10 +3779,10 @@ class EventTab(QWidget):
             # Zone de texte
             text_edit = QTextEdit()
             text_edit.setReadOnly(True)
-            text_edit.setHtml("""
+            text_edit.setHtml(f"""
                 <div style="font-family: 'Segoe UI', Arial, sans-serif; color: #e6edf3;">
                     <div style="background-color: #161b22; padding: 15px; border-radius: 8px; line-height: 1.6;">
-                        {message.replace('\n', '<br>')}
+                        {message.replace(chr(10), '<br>')}
                     </div>
                 </div>
             """)
@@ -6649,17 +6649,23 @@ class ItemsTab(QWidget):
             QMessageBox.critical(self, "Erreur", f"Impossible de charger l'image: {str(e)}")
             
     def load_existing_image(self, image_url):
-        """Charge l'image existante depuis Cloudinary"""
+        """Charge l'image existante depuis le serveur ou Cloudinary"""
         if not image_url:
             self.clear_image()
             return
 
         try:
-            self.image_preview.setText("🔄 Chargement depuis le cloud...")
+            # Construire l'URL complète si c'est un chemin relatif
+            if image_url.startswith('/'):
+                full_url = f"{self.api_client.backend_url}{image_url}"
+            else:
+                full_url = image_url
 
-            # Utiliser httpx.get() directement pour les URLs externes (Cloudinary)
-            # car self.api_client.client a un base_url qui interfère
-            response = httpx.get(image_url, timeout=10.0, follow_redirects=True)
+            print(f"🖼️ Chargement image item: {full_url}")
+            self.image_preview.setText("🔄 Chargement de l'image...")
+
+            # Utiliser httpx.get() directement pour éviter l'interférence du base_url
+            response = httpx.get(full_url, timeout=10.0, follow_redirects=True)
             if response.status_code == 200:
                 pixmap = QPixmap()
                 pixmap.loadFromData(response.content)
@@ -6667,15 +6673,16 @@ class ItemsTab(QWidget):
                 if not pixmap.isNull():
                     scaled_pixmap = pixmap.scaled(200, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self.image_preview.setPixmap(scaled_pixmap)
-                    print(f"✅ Image Cloudinary chargée: {image_url}")
+                    print(f"✅ Image item chargée: {full_url}")
                 else:
+                    print(f"⚠️ Image corrompue ou format non supporté")
                     self.image_preview.setText("⚠️ Image corrompue")
             else:
                 print(f"⚠️ Image non trouvée: HTTP {response.status_code}")
                 self.clear_image()
 
         except Exception as e:
-            print(f"❌ Erreur chargement image Cloudinary: {e}")
+            print(f"❌ Erreur chargement image item: {e}")
             self.clear_image()
             
     def clear_image(self):
