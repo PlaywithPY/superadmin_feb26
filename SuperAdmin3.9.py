@@ -688,12 +688,17 @@ class APIClient:
         return self._cached_get("/admin/effect-types", cache_ttl=300)
 
     def get_all_items(self):
-        """Récupère tous les items"""
-        return self._cached_get("/admin/items", cache_ttl=30)
+        """Récupère tous les items via /api/items (retourne image_url)"""
+        data = self._cached_get("/api/items", cache_ttl=30)
+        # Normaliser la réponse : /api/items peut retourner une liste directe
+        # ou un dict avec clé "items" — on unifie vers {"items": [...]}
+        if isinstance(data, list):
+            return {"items": data}
+        return data
 
     def invalidate_items_cache(self):
         """Invalide le cache des items après modification"""
-        self.invalidate_cache("/admin/items")
+        self.invalidate_cache("/api/items")
     def get_active_effects_for_event(api_client, event_type: str):
         """Récupère les effets actifs pour un type d'événement"""
         try:
@@ -6649,31 +6654,19 @@ class ItemsTab(QWidget):
             QMessageBox.critical(self, "Erreur", f"Impossible de charger l'image: {str(e)}")
             
     def load_existing_image(self, image_url=None, item_code=None):
-        """Charge l'image existante depuis Cloudinary ou via l'API backend"""
-        # Si pas d'URL directe, essayer de récupérer via l'API
-        if not image_url and item_code:
-            print(f"🔍 Pas d'image_url dans les données, requête API pour {item_code}...")
-            try:
-                item_detail = self.api_client._make_request("GET", f"/admin/items/{item_code}")
-                if item_detail and isinstance(item_detail, dict):
-                    image_url = item_detail.get('image_url') or item_detail.get('image')
-                    print(f"🔍 API retourne image_url: {image_url}")
-            except Exception as e:
-                print(f"❌ Erreur récupération détails item: {e}")
-
+        """Charge l'image existante depuis Cloudinary"""
         if not image_url:
             self.clear_image()
             return
 
         try:
-            # Construire l'URL complète si c'est un chemin relatif
             if image_url.startswith('/'):
                 full_url = f"{self.api_client.backend_url}{image_url}"
             else:
                 full_url = image_url
 
             print(f"🖼️ Chargement image item: {full_url}")
-            self.image_preview.setText("🔄 Chargement de l'image...")
+            self.image_preview.setText("🔄 Chargement...")
 
             response = requests.get(full_url, timeout=10)
             if response.status_code == 200:
@@ -6685,14 +6678,13 @@ class ItemsTab(QWidget):
                     self.image_preview.setPixmap(scaled_pixmap)
                     print(f"✅ Image item chargée")
                 else:
-                    print(f"⚠️ Image corrompue ou format non supporté")
                     self.image_preview.setText("⚠️ Image corrompue")
             else:
-                print(f"⚠️ Image non trouvée: HTTP {response.status_code}")
+                print(f"⚠️ Image HTTP {response.status_code}")
                 self.clear_image()
 
         except Exception as e:
-            print(f"❌ Erreur chargement image item: {e}")
+            print(f"❌ Erreur chargement image: {e}")
             self.clear_image()
             
     def clear_image(self):
