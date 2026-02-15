@@ -6562,17 +6562,18 @@ class ItemsTab(QWidget):
         # Deuxième ligne de filtres
         filter_layout2 = QHBoxLayout()
 
-        # Filtre par catégorie (champ type en DB)
+        # Filtre par catégorie
         self.category_filter = QComboBox()
-        self.category_filter.addItems(["Toutes catégories", "resource", "tool"])
-        self.category_filter.currentTextChanged.connect(self.filter_items)
+        self.category_filter.addItems(["Toutes catégories", "Ressources", "Outils", "Objets de Quête"])
+        self.category_filter.currentTextChanged.connect(self.on_category_changed)
         filter_layout2.addWidget(self.category_filter)
 
-        # Filtre bootstrap/craftées (pour resources)
-        self.origin_filter = QComboBox()
-        self.origin_filter.addItems(["Toutes origines", "Bootstrap", "Craftées (supercraft)"])
-        self.origin_filter.currentTextChanged.connect(self.filter_items)
-        filter_layout2.addWidget(self.origin_filter)
+        # Sous-filtre ressources (lootables vs craftables) - masqué par défaut
+        self.resource_sub_filter = QComboBox()
+        self.resource_sub_filter.addItems(["Toutes ressources", "Lootables", "Craftables (supercraft)"])
+        self.resource_sub_filter.currentTextChanged.connect(self.filter_items)
+        self.resource_sub_filter.hide()
+        filter_layout2.addWidget(self.resource_sub_filter)
 
         self.no_image_filter = QCheckBox("📷 Sans image")
         self.no_image_filter.stateChanged.connect(self.filter_items)
@@ -6677,7 +6678,7 @@ class ItemsTab(QWidget):
     def load_existing_image(self, image_url=None, item_code=None):
         """Charge l'image via l'URL Cloudinary (même méthode que les boss)"""
         if not image_url:
-            self.clear_image()
+            self._reset_image_preview()
             return
 
         try:
@@ -6697,17 +6698,22 @@ class ItemsTab(QWidget):
                 else:
                     self.image_preview.setText("⚠️ Image corrompue")
             else:
-                self.clear_image()
+                self._reset_image_preview()
 
         except Exception as e:
             print(f"❌ Erreur chargement image: {e}")
-            self.clear_image()
-            
+            self._reset_image_preview()
+
+    def _reset_image_preview(self):
+        """Remet l'aperçu image à zéro (UI uniquement, pas d'appel serveur)"""
+        self.image_preview.clear()
+        self.image_preview.setText("Aucune image\n\n📁 Glisser-déposer une image\nou cliquer pour sélectionner")
+        self.current_image_path = None
+
     def clear_image(self):
-        """Supprime l'image actuelle - appel API + nettoyage UI"""
-        # Si un item est sélectionné, supprimer l'image côté serveur
-        if self.current_item and self.current_item.get('code'):
-            code = self.current_item['code']
+        """Bouton supprimer : supprime l'image du serveur si elle existe"""
+        if self.current_item and self.current_item.get('image_url'):
+            code = self.current_item.get('code', '')
             reply = QMessageBox.question(
                 self,
                 "Confirmation",
@@ -6719,15 +6725,12 @@ class ItemsTab(QWidget):
             result = self.api_client.delete_item_image(code)
             if result and "error" not in result:
                 print(f"✅ Image supprimée en DB pour {code}")
-                # Mettre à jour les données locales
                 self.current_item['image_url'] = None
                 self.api_client.invalidate_items_cache()
             else:
                 print(f"❌ Erreur suppression image: {result}")
 
-        self.image_preview.clear()
-        self.image_preview.setText("Aucune image\n\n📁 Glisser-déposer une image\nou cliquer pour sélectionner")
-        self.current_image_path = None
+        self._reset_image_preview()
 
 
     def refresh_items(self):
@@ -6738,7 +6741,6 @@ class ItemsTab(QWidget):
 
             if data and "error" not in data:
                 self.all_items = data.get("items", [])
-                self.update_category_filter()
                 self.display_items(self.all_items)
             else:
                 self.load_items_fallback()
@@ -6797,32 +6799,36 @@ class ItemsTab(QWidget):
             item_widget.setToolTip(tooltip)
             self.items_list.addItem(item_widget)
 
-    def update_category_filter(self):
-        """Met à jour le dropdown catégorie avec les types trouvés dans les données"""
-        categories = set()
-        for item in self.all_items:
-            t = item.get('type')
-            if t:
-                categories.add(t)
-        current = self.category_filter.currentText()
-        self.category_filter.blockSignals(True)
-        self.category_filter.clear()
-        self.category_filter.addItem("Toutes catégories")
-        for cat in sorted(categories):
-            self.category_filter.addItem(cat)
-        # Restaurer la sélection si possible
-        idx = self.category_filter.findText(current)
-        if idx >= 0:
-            self.category_filter.setCurrentIndex(idx)
-        self.category_filter.blockSignals(False)
+    # Codes des ressources lootables (drops de missions solo)
+    LOOTABLE_CODES = {
+        # Bois (mission bois)
+        "WOOD_RAW", "WOOD_KNOTTY", "WOOD_BLACK", "WOOD_ANCIENT", "WOOD_LUNAR", "WOOD_HEART",
+        # Pierre (mission pierre)
+        "STONE_RAW", "STONE_SPLIT", "STONE_LUNAR", "STONE_RUNIC", "STONE_HEART",
+        # Végétaux (ramassage main)
+        "HERB_WILT", "ROOT_BLACK", "LICHEN_DARK", "FLOWER_NIGHT", "ROOT_NIGHTMARE", "ESSENCE_FOREST",
+        # Dragage
+        "DEBRIS_SOGGY", "PAPER_SOGGY", "LEATHER_SOGGY", "PAGE_ILLEGIBLE", "DEBRIS_LUNAR", "FRAGMENT_NIGHT",
+        # Os (mission os)
+        "BONE_TARNISHED", "BONE_ENGRAVED", "BONE_ANCIENT", "BONE_CURSED", "BONE_WOLF",
+    }
+
+    def on_category_changed(self, category):
+        """Affiche/masque le sous-filtre ressources selon la catégorie choisie"""
+        if category == "Ressources":
+            self.resource_sub_filter.show()
+        else:
+            self.resource_sub_filter.hide()
+            self.resource_sub_filter.setCurrentIndex(0)
+        self.filter_items()
 
     def filter_items(self):
-        """Filtre les items selon recherche, rareté, type, catégorie, origine et image"""
+        """Filtre les items selon recherche, rareté, type, catégorie et image"""
         search_text = self.search_input.text().lower()
         rarity_filter = self.rarity_filter.currentText()
         type_filter = self.type_filter.currentText()
         category_filter = self.category_filter.currentText()
-        origin_filter = self.origin_filter.currentText()
+        resource_sub = self.resource_sub_filter.currentText()
         no_image_only = self.no_image_filter.isChecked()
 
         filtered_items = []
@@ -6843,23 +6849,32 @@ class ItemsTab(QWidget):
             elif type_filter == "Groupe seulement":
                 matches_type = item.get('is_group_reward', False)
 
-            # Filtre par catégorie (champ type en DB)
-            matches_category = (category_filter == "Toutes catégories" or
-                              item.get('type', '') == category_filter)
+            # Filtre par catégorie
+            matches_category = True
+            if category_filter == "Ressources":
+                matches_category = (item.get('type') == 'resource' and
+                                  item.get('evenement_id') is None)
+            elif category_filter == "Outils":
+                matches_category = item.get('type') == 'tool'
+            elif category_filter == "Objets de Quête":
+                matches_category = item.get('evenement_id') is not None
 
-            # Filtre origine (bootstrap = lié à un événement, craftées = sans événement)
-            matches_origin = True
-            if origin_filter == "Bootstrap":
-                matches_origin = item.get('evenement_id') is not None
-            elif origin_filter == "Craftées (supercraft)":
-                matches_origin = item.get('evenement_id') is None
+            # Sous-filtre ressources (lootables vs craftables)
+            matches_resource_sub = True
+            if category_filter == "Ressources" and matches_category:
+                code = item.get('code', '')
+                if resource_sub == "Lootables":
+                    matches_resource_sub = code in self.LOOTABLE_CODES
+                elif resource_sub == "Craftables (supercraft)":
+                    matches_resource_sub = code not in self.LOOTABLE_CODES
 
             # Filtre sans image
             matches_image = True
             if no_image_only:
                 matches_image = not bool(item.get('image_url'))
 
-            if matches_search and matches_rarity and matches_type and matches_category and matches_origin and matches_image:
+            if (matches_search and matches_rarity and matches_type and
+                    matches_category and matches_resource_sub and matches_image):
                 filtered_items.append(item)
 
         self.display_items(filtered_items)
@@ -6903,7 +6918,7 @@ class ItemsTab(QWidget):
         self.item_stackable.setChecked(True)
         self.item_evenement_id.clear()
         self.item_is_group_reward.setChecked(False)
-        self.clear_image()
+        self._reset_image_preview()
         self.items_list.clearSelection()
 
     def save_item(self):
