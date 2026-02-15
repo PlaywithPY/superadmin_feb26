@@ -688,17 +688,32 @@ class APIClient:
         return self._cached_get("/admin/effect-types", cache_ttl=300)
 
     def get_all_items(self):
-        """Récupère tous les items via /api/items (retourne image_url)"""
-        data = self._cached_get("/api/items", cache_ttl=30)
-        # Normaliser la réponse : /api/items peut retourner une liste directe
-        # ou un dict avec clé "items" — on unifie vers {"items": [...]}
-        if isinstance(data, list):
-            return {"items": data}
-        return data
+        """Récupère tous les items en fusionnant /api/items (image_url) et /admin/items (type)"""
+        # /api/items retourne image_url mais pas type
+        api_data = self._cached_get("/api/items", cache_ttl=30)
+        api_items = api_data if isinstance(api_data, list) else (api_data.get("items", []) if api_data else [])
+
+        # /admin/items retourne type mais pas image_url
+        admin_data = self._cached_get("/admin/items", cache_ttl=30)
+        admin_items = admin_data.get("items", []) if admin_data and isinstance(admin_data, dict) else []
+
+        # Index admin par code pour fusion rapide
+        admin_by_code = {it.get('code'): it for it in admin_items}
+
+        # Fusionner : enrichir chaque item API avec les champs manquants d'admin
+        for item in api_items:
+            admin_item = admin_by_code.get(item.get('code'))
+            if admin_item:
+                for key, value in admin_item.items():
+                    if key not in item or item[key] is None:
+                        item[key] = value
+
+        return {"items": api_items}
 
     def invalidate_items_cache(self):
         """Invalide le cache des items après modification"""
         self.invalidate_cache("/api/items")
+        self.invalidate_cache("/admin/items")
     def get_active_effects_for_event(api_client, event_type: str):
         """Récupère les effets actifs pour un type d'événement"""
         try:
