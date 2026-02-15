@@ -6791,7 +6791,12 @@ class ItemsTab(QWidget):
         """Quand un item est sélectionné dans la liste"""
         item_data = item.data(Qt.UserRole)
         self.current_item = item_data
-        
+
+        # Debug: afficher les clés et le champ image pour diagnostiquer
+        print(f"🔍 DEBUG item_selected - clés: {list(item_data.keys())}")
+        print(f"🔍 DEBUG item_selected - image_url: {item_data.get('image_url')}")
+        print(f"🔍 DEBUG item_selected - image: {item_data.get('image')}")
+
         # Remplir le formulaire
         self.item_code.setText(item_data.get('code', ''))
         self.item_name.setText(item_data.get('name', ''))
