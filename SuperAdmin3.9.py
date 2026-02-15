@@ -6503,10 +6503,15 @@ class ItemsTab(QWidget):
         self.item_is_group_reward.setText("Récompense de mission de groupe")
         self.item_is_group_reward.setToolTip("Si coché, cet item sera disponible comme récompense pour les missions de groupe")
 
+        # Type d'item
+        self.item_type = QComboBox()
+        self.item_type.addItems(["resource", "tool"])
+
         # Ajout des champs au formulaire
         fields_layout.addRow("Code*:", self.item_code)
         fields_layout.addRow("Nom*:", self.item_name)
         fields_layout.addRow("Description:", self.item_description)
+        fields_layout.addRow("Type:", self.item_type)
         fields_layout.addRow("Rareté:", self.item_rarity)
         fields_layout.addRow("Stackable:", self.item_stackable)
         fields_layout.addRow("ID Événement:", self.item_evenement_id)
@@ -6741,18 +6746,6 @@ class ItemsTab(QWidget):
 
             if data and "error" not in data:
                 self.all_items = data.get("items", [])
-                # Debug: analyser les types retournés par l'API
-                if self.all_items:
-                    sample = self.all_items[0]
-                    print(f"🔍 DEBUG clés item: {list(sample.keys())}")
-                    types_found = set()
-                    for it in self.all_items:
-                        t = it.get('type')
-                        if t:
-                            types_found.add(t)
-                    print(f"🔍 DEBUG types trouvés: {types_found}")
-                    sans_type = [it.get('code') for it in self.all_items if not it.get('type')]
-                    print(f"🔍 DEBUG items sans type ({len(sans_type)}): {sans_type[:5]}...")
                 self.display_items(self.all_items)
             else:
                 self.load_items_fallback()
@@ -6910,6 +6903,12 @@ class ItemsTab(QWidget):
         self.item_stackable.setChecked(item_data.get('stackable', True))
         self.item_evenement_id.setText(str(item_data.get('evenement_id', '')))
 
+        # Définir le type
+        item_type = item_data.get('type', 'resource')
+        type_index = self.item_type.findText(item_type)
+        if type_index >= 0:
+            self.item_type.setCurrentIndex(type_index)
+
         # Définir la checkbox de récompense de groupe
         is_group_reward = item_data.get('is_group_reward', False)
         self.item_is_group_reward.setChecked(bool(is_group_reward))
@@ -6927,6 +6926,7 @@ class ItemsTab(QWidget):
         self.item_name.clear()
         self.item_description.clear()
         self.item_rarity.setCurrentIndex(0)
+        self.item_type.setCurrentIndex(0)
         self.item_stackable.setChecked(True)
         self.item_evenement_id.clear()
         self.item_is_group_reward.setChecked(False)
@@ -6953,6 +6953,7 @@ class ItemsTab(QWidget):
                 "code": code,
                 "name": name,
                 "description": self.item_description.toPlainText().strip(),
+                "type": self.item_type.currentText(),
                 "rarity": self.item_rarity.currentText(),
                 "stackable": self.item_stackable.isChecked(),
                 "is_group_reward": self.item_is_group_reward.isChecked()
