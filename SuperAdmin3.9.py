@@ -6648,8 +6648,19 @@ class ItemsTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Erreur", f"Impossible de charger l'image: {str(e)}")
             
-    def load_existing_image(self, image_url):
-        """Charge l'image existante depuis le serveur ou Cloudinary"""
+    def load_existing_image(self, image_url=None, item_code=None):
+        """Charge l'image existante depuis Cloudinary ou via l'API backend"""
+        # Si pas d'URL directe, essayer de récupérer via l'API
+        if not image_url and item_code:
+            print(f"🔍 Pas d'image_url dans les données, requête API pour {item_code}...")
+            try:
+                item_detail = self.api_client._make_request("GET", f"/admin/items/{item_code}")
+                if item_detail and isinstance(item_detail, dict):
+                    image_url = item_detail.get('image_url') or item_detail.get('image')
+                    print(f"🔍 API retourne image_url: {image_url}")
+            except Exception as e:
+                print(f"❌ Erreur récupération détails item: {e}")
+
         if not image_url:
             self.clear_image()
             return
@@ -6664,8 +6675,7 @@ class ItemsTab(QWidget):
             print(f"🖼️ Chargement image item: {full_url}")
             self.image_preview.setText("🔄 Chargement de l'image...")
 
-            # Utiliser httpx.get() directement pour éviter l'interférence du base_url
-            response = httpx.get(full_url, timeout=10.0, follow_redirects=True)
+            response = requests.get(full_url, timeout=10)
             if response.status_code == 200:
                 pixmap = QPixmap()
                 pixmap.loadFromData(response.content)
@@ -6673,7 +6683,7 @@ class ItemsTab(QWidget):
                 if not pixmap.isNull():
                     scaled_pixmap = pixmap.scaled(200, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self.image_preview.setPixmap(scaled_pixmap)
-                    print(f"✅ Image item chargée: {full_url}")
+                    print(f"✅ Image item chargée")
                 else:
                     print(f"⚠️ Image corrompue ou format non supporté")
                     self.image_preview.setText("⚠️ Image corrompue")
@@ -6792,32 +6802,28 @@ class ItemsTab(QWidget):
         item_data = item.data(Qt.UserRole)
         self.current_item = item_data
 
-        # Debug: afficher les clés et le champ image pour diagnostiquer
-        print(f"🔍 DEBUG item_selected - clés: {list(item_data.keys())}")
-        print(f"🔍 DEBUG item_selected - image_url: {item_data.get('image_url')}")
-        print(f"🔍 DEBUG item_selected - image: {item_data.get('image')}")
-
         # Remplir le formulaire
         self.item_code.setText(item_data.get('code', ''))
         self.item_name.setText(item_data.get('name', ''))
         self.item_description.setPlainText(item_data.get('description', ''))
-        
+
         # Définir la rareté
         rarity = item_data.get('rarity', 'common')
         index = self.item_rarity.findText(rarity)
         if index >= 0:
             self.item_rarity.setCurrentIndex(index)
-            
+
         self.item_stackable.setChecked(item_data.get('stackable', True))
         self.item_evenement_id.setText(str(item_data.get('evenement_id', '')))
-        
+
         # Définir la checkbox de récompense de groupe
         is_group_reward = item_data.get('is_group_reward', False)
         self.item_is_group_reward.setChecked(bool(is_group_reward))
-        
-        # Charger l'image existante
-        image_url = item_data.get('image_url')
-        self.load_existing_image(image_url)
+
+        # Charger l'image existante (chercher dans plusieurs champs possibles)
+        image_url = item_data.get('image_url') or item_data.get('image') or None
+        item_code = item_data.get('code', '')
+        self.load_existing_image(image_url, item_code)
         self.current_image_path = None  # Réinitialiser le chemin de nouvelle image
 
     def new_item(self):
