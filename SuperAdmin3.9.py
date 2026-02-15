@@ -6741,6 +6741,18 @@ class ItemsTab(QWidget):
 
             if data and "error" not in data:
                 self.all_items = data.get("items", [])
+                # Debug: analyser les types retournés par l'API
+                if self.all_items:
+                    sample = self.all_items[0]
+                    print(f"🔍 DEBUG clés item: {list(sample.keys())}")
+                    types_found = set()
+                    for it in self.all_items:
+                        t = it.get('type')
+                        if t:
+                            types_found.add(t)
+                    print(f"🔍 DEBUG types trouvés: {types_found}")
+                    sans_type = [it.get('code') for it in self.all_items if not it.get('type')]
+                    print(f"🔍 DEBUG items sans type ({len(sans_type)}): {sans_type[:5]}...")
                 self.display_items(self.all_items)
             else:
                 self.load_items_fallback()
