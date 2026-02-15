@@ -6654,33 +6654,39 @@ class ItemsTab(QWidget):
             QMessageBox.critical(self, "Erreur", f"Impossible de charger l'image: {str(e)}")
             
     def load_existing_image(self, image_url=None, item_code=None):
-        """Charge l'image existante depuis Cloudinary"""
-        if not image_url:
+        """Charge l'image via l'endpoint backend authentifié (rapide)"""
+        if not image_url and not item_code:
             self.clear_image()
             return
 
         try:
-            if image_url.startswith('/'):
-                full_url = f"{self.api_client.backend_url}{image_url}"
+            # Utiliser l'endpoint authentifié du backend (connexion httpx réutilisée)
+            if item_code:
+                headers = {}
+                if self.api_client.jwt_token:
+                    headers['Authorization'] = f'Bearer {self.api_client.jwt_token}'
+                response = self.api_client.client.get(
+                    f"/admin/items/{item_code}/image",
+                    headers=headers,
+                    timeout=10.0
+                )
             else:
-                full_url = image_url
+                # Fallback sur l'URL directe
+                if image_url.startswith('/'):
+                    full_url = f"{self.api_client.backend_url}{image_url}"
+                else:
+                    full_url = image_url
+                response = httpx.get(full_url, timeout=10.0, follow_redirects=True)
 
-            print(f"🖼️ Chargement image item: {full_url}")
-            self.image_preview.setText("🔄 Chargement...")
-
-            response = requests.get(full_url, timeout=10)
             if response.status_code == 200:
                 pixmap = QPixmap()
                 pixmap.loadFromData(response.content)
-
                 if not pixmap.isNull():
                     scaled_pixmap = pixmap.scaled(200, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self.image_preview.setPixmap(scaled_pixmap)
-                    print(f"✅ Image item chargée")
                 else:
                     self.image_preview.setText("⚠️ Image corrompue")
             else:
-                print(f"⚠️ Image HTTP {response.status_code}")
                 self.clear_image()
 
         except Exception as e:
