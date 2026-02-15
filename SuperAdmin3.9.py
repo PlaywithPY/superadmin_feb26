@@ -6551,17 +6551,34 @@ class ItemsTab(QWidget):
         self.rarity_filter.currentTextChanged.connect(self.filter_items)
         filter_layout.addWidget(self.rarity_filter)
 
-        # Filtre pour le type d'item
+        # Filtre solo/groupe
         self.type_filter = QComboBox()
         self.type_filter.addItems(["Tous les types", "Solo seulement", "Groupe seulement"])
         self.type_filter.currentTextChanged.connect(self.filter_items)
         filter_layout.addWidget(self.type_filter)
 
+        list_layout.addLayout(filter_layout)
+
+        # Deuxième ligne de filtres
+        filter_layout2 = QHBoxLayout()
+
+        # Filtre par catégorie (champ type en DB)
+        self.category_filter = QComboBox()
+        self.category_filter.addItems(["Toutes catégories", "resource", "tool"])
+        self.category_filter.currentTextChanged.connect(self.filter_items)
+        filter_layout2.addWidget(self.category_filter)
+
+        # Filtre bootstrap/craftées (pour resources)
+        self.origin_filter = QComboBox()
+        self.origin_filter.addItems(["Toutes origines", "Bootstrap", "Craftées (supercraft)"])
+        self.origin_filter.currentTextChanged.connect(self.filter_items)
+        filter_layout2.addWidget(self.origin_filter)
+
         self.no_image_filter = QCheckBox("📷 Sans image")
         self.no_image_filter.stateChanged.connect(self.filter_items)
-        filter_layout.addWidget(self.no_image_filter)
+        filter_layout2.addWidget(self.no_image_filter)
 
-        list_layout.addLayout(filter_layout)
+        list_layout.addLayout(filter_layout2)
         
         # Liste des items
         self.items_list = QListWidget()
@@ -6687,7 +6704,27 @@ class ItemsTab(QWidget):
             self.clear_image()
             
     def clear_image(self):
-        """Supprime l'image actuelle"""
+        """Supprime l'image actuelle - appel API + nettoyage UI"""
+        # Si un item est sélectionné, supprimer l'image côté serveur
+        if self.current_item and self.current_item.get('code'):
+            code = self.current_item['code']
+            reply = QMessageBox.question(
+                self,
+                "Confirmation",
+                f"Supprimer l'image de '{code}' du serveur ?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+            result = self.api_client.delete_item_image(code)
+            if result and "error" not in result:
+                print(f"✅ Image supprimée en DB pour {code}")
+                # Mettre à jour les données locales
+                self.current_item['image_url'] = None
+                self.api_client.invalidate_items_cache()
+            else:
+                print(f"❌ Erreur suppression image: {result}")
+
         self.image_preview.clear()
         self.image_preview.setText("Aucune image\n\n📁 Glisser-déposer une image\nou cliquer pour sélectionner")
         self.current_image_path = None
@@ -6698,9 +6735,10 @@ class ItemsTab(QWidget):
         try:
             self.api_client.invalidate_items_cache()
             data = self.api_client.get_all_items()
-            
+
             if data and "error" not in data:
                 self.all_items = data.get("items", [])
+                self.update_category_filter()
                 self.display_items(self.all_items)
             else:
                 self.load_items_fallback()
@@ -6759,11 +6797,32 @@ class ItemsTab(QWidget):
             item_widget.setToolTip(tooltip)
             self.items_list.addItem(item_widget)
 
+    def update_category_filter(self):
+        """Met à jour le dropdown catégorie avec les types trouvés dans les données"""
+        categories = set()
+        for item in self.all_items:
+            t = item.get('type')
+            if t:
+                categories.add(t)
+        current = self.category_filter.currentText()
+        self.category_filter.blockSignals(True)
+        self.category_filter.clear()
+        self.category_filter.addItem("Toutes catégories")
+        for cat in sorted(categories):
+            self.category_filter.addItem(cat)
+        # Restaurer la sélection si possible
+        idx = self.category_filter.findText(current)
+        if idx >= 0:
+            self.category_filter.setCurrentIndex(idx)
+        self.category_filter.blockSignals(False)
+
     def filter_items(self):
-        """Filtre les items selon la recherche, la rareté, le type et l'image"""
+        """Filtre les items selon recherche, rareté, type, catégorie, origine et image"""
         search_text = self.search_input.text().lower()
         rarity_filter = self.rarity_filter.currentText()
         type_filter = self.type_filter.currentText()
+        category_filter = self.category_filter.currentText()
+        origin_filter = self.origin_filter.currentText()
         no_image_only = self.no_image_filter.isChecked()
 
         filtered_items = []
@@ -6777,19 +6836,30 @@ class ItemsTab(QWidget):
             matches_rarity = (rarity_filter == "Toutes les raretés" or
                             item.get('rarity', '') == rarity_filter)
 
-            # Filtre par type
+            # Filtre solo/groupe
             matches_type = True
             if type_filter == "Solo seulement":
                 matches_type = not item.get('is_group_reward', False)
             elif type_filter == "Groupe seulement":
                 matches_type = item.get('is_group_reward', False)
 
+            # Filtre par catégorie (champ type en DB)
+            matches_category = (category_filter == "Toutes catégories" or
+                              item.get('type', '') == category_filter)
+
+            # Filtre origine (bootstrap = lié à un événement, craftées = sans événement)
+            matches_origin = True
+            if origin_filter == "Bootstrap":
+                matches_origin = item.get('evenement_id') is not None
+            elif origin_filter == "Craftées (supercraft)":
+                matches_origin = item.get('evenement_id') is None
+
             # Filtre sans image
             matches_image = True
             if no_image_only:
                 matches_image = not bool(item.get('image_url'))
 
-            if matches_search and matches_rarity and matches_type and matches_image:
+            if matches_search and matches_rarity and matches_type and matches_category and matches_origin and matches_image:
                 filtered_items.append(item)
 
         self.display_items(filtered_items)
