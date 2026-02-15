@@ -6557,6 +6557,10 @@ class ItemsTab(QWidget):
         self.type_filter.currentTextChanged.connect(self.filter_items)
         filter_layout.addWidget(self.type_filter)
 
+        self.no_image_filter = QCheckBox("📷 Sans image")
+        self.no_image_filter.stateChanged.connect(self.filter_items)
+        filter_layout.addWidget(self.no_image_filter)
+
         list_layout.addLayout(filter_layout)
         
         # Liste des items
@@ -6654,30 +6658,19 @@ class ItemsTab(QWidget):
             QMessageBox.critical(self, "Erreur", f"Impossible de charger l'image: {str(e)}")
             
     def load_existing_image(self, image_url=None, item_code=None):
-        """Charge l'image via l'endpoint backend authentifié (rapide)"""
-        if not image_url and not item_code:
+        """Charge l'image via l'URL Cloudinary (même méthode que les boss)"""
+        if not image_url:
             self.clear_image()
             return
 
         try:
-            # Utiliser l'endpoint authentifié du backend (connexion httpx réutilisée)
-            if item_code:
-                headers = {}
-                if self.api_client.jwt_token:
-                    headers['Authorization'] = f'Bearer {self.api_client.jwt_token}'
-                response = self.api_client.client.get(
-                    f"/admin/items/{item_code}/image",
-                    headers=headers,
-                    timeout=10.0
-                )
+            if image_url.startswith('/'):
+                full_url = f"{self.api_client.backend_url}{image_url}"
             else:
-                # Fallback sur l'URL directe
-                if image_url.startswith('/'):
-                    full_url = f"{self.api_client.backend_url}{image_url}"
-                else:
-                    full_url = image_url
-                response = httpx.get(full_url, timeout=10.0, follow_redirects=True)
+                full_url = image_url
 
+            # Même méthode que load_boss_image : httpx.get direct
+            response = httpx.get(full_url, timeout=10.0, follow_redirects=True)
             if response.status_code == 200:
                 pixmap = QPixmap()
                 pixmap.loadFromData(response.content)
@@ -6767,32 +6760,38 @@ class ItemsTab(QWidget):
             self.items_list.addItem(item_widget)
 
     def filter_items(self):
-        """Filtre les items selon la recherche, la rareté et le type"""
+        """Filtre les items selon la recherche, la rareté, le type et l'image"""
         search_text = self.search_input.text().lower()
         rarity_filter = self.rarity_filter.currentText()
         type_filter = self.type_filter.currentText()
-        
+        no_image_only = self.no_image_filter.isChecked()
+
         filtered_items = []
         for item in self.all_items:
             # Filtre par recherche
-            matches_search = (search_text in item.get('code', '').lower() or 
+            matches_search = (search_text in item.get('code', '').lower() or
                             search_text in item.get('name', '').lower() or
                             search_text in item.get('description', '').lower())
-            
+
             # Filtre par rareté
-            matches_rarity = (rarity_filter == "Toutes les raretés" or 
+            matches_rarity = (rarity_filter == "Toutes les raretés" or
                             item.get('rarity', '') == rarity_filter)
-            
+
             # Filtre par type
             matches_type = True
             if type_filter == "Solo seulement":
                 matches_type = not item.get('is_group_reward', False)
             elif type_filter == "Groupe seulement":
                 matches_type = item.get('is_group_reward', False)
-            
-            if matches_search and matches_rarity and matches_type:
+
+            # Filtre sans image
+            matches_image = True
+            if no_image_only:
+                matches_image = not bool(item.get('image_url'))
+
+            if matches_search and matches_rarity and matches_type and matches_image:
                 filtered_items.append(item)
-                
+
         self.display_items(filtered_items)
 
     def item_selected(self, item):
