@@ -824,6 +824,40 @@ class APIClient:
     def delete_boss_sound(self, boss_id, sound_type):
         """Supprime un son de boss"""
         return self._make_request("DELETE", f"/admin/boss/{boss_id}/sound/{sound_type}")
+
+    def upload_boss_video(self, boss_id, video_path):
+        """Upload une vidéo intro pour un boss sur Cloudinary"""
+        try:
+            print(f"📤 Upload vidéo boss {boss_id}: {video_path}")
+            with open(video_path, 'rb') as f:
+                files = {'video': (os.path.basename(video_path), f, 'video/mp4')}
+                data = {'boss_id': boss_id}
+
+                headers = {}
+                if self.jwt_token:
+                    headers['Authorization'] = f'Bearer {self.jwt_token}'
+
+                response = self.client.post(
+                    f"{self.backend_url}/admin/boss/{boss_id}/upload-video",
+                    files=files,
+                    data=data,
+                    headers=headers,
+                    timeout=120.0  # Timeout long pour les vidéos
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    video_url = result.get('video_url')
+                    print(f"✅ Upload vidéo réussi: {video_url}")
+                    return video_url
+                else:
+                    print(f"❌ Erreur upload vidéo: {response.status_code} - {response.text}")
+                    return None
+
+        except Exception as e:
+            print(f"❌ Erreur upload vidéo: {e}")
+            return None
+
     def upload_boss_sound(self, boss_id, sound_type, sound_path):
         """Upload un son pour un boss"""
         try:
@@ -5439,6 +5473,7 @@ class BossTab(QWidget):
         self.api_client = api_client
         self.current_boss = None
         self.current_image_path = None
+        self.current_video_path = None
         self.current_sounds = {}  # Dictionnaire pour stocker les chemins des sons
         self.init_ui()
         self.load_boss_list()
@@ -5763,6 +5798,40 @@ class BossTab(QWidget):
         sounds_layout.addWidget(sounds_group)
         sounds_tab.setLayout(sounds_layout)
         tabs.addTab(sounds_tab, "🔊 Sons")
+
+        # Onglet Vidéo
+        video_tab = QWidget()
+        video_layout = QVBoxLayout()
+
+        self.boss_video_preview = QLabel()
+        self.boss_video_preview.setAlignment(Qt.AlignCenter)
+        self.boss_video_preview.setStyleSheet("""
+            QLabel {
+                background-color: #161b22;
+                border: 2px dashed #30363d;
+                border-radius: 8px;
+                min-height: 100px;
+                max-height: 100px;
+            }
+        """)
+        self.boss_video_preview.setText("Aucune vidéo\n\n📁 Cliquer pour sélectionner")
+        self.boss_video_preview.setWordWrap(True)
+        self.boss_video_preview.mousePressEvent = lambda e: self.select_boss_video()
+
+        video_btn_layout = QHBoxLayout()
+        select_video_btn = QPushButton("🎬 Sélectionner vidéo")
+        select_video_btn.clicked.connect(self.select_boss_video)
+        clear_video_btn = QPushButton("🗑️ Supprimer")
+        clear_video_btn.clicked.connect(self.clear_boss_video)
+        clear_video_btn.setStyleSheet("background-color: #da3633;")
+
+        video_btn_layout.addWidget(select_video_btn)
+        video_btn_layout.addWidget(clear_video_btn)
+
+        video_layout.addWidget(self.boss_video_preview)
+        video_layout.addLayout(video_btn_layout)
+        video_tab.setLayout(video_layout)
+        tabs.addTab(video_tab, "🎬 Vidéo")
 
         # Onglet Lore
         lore_tab = QWidget()
@@ -6150,12 +6219,17 @@ class BossTab(QWidget):
         self.load_boss_sound(boss.get('son_cri_douleur_75'), self.cri_douleur_75_preview)
         self.load_boss_sound(boss.get('son_cri_agonie'), self.cri_agonie_preview)
 
+        # Vidéo
+        self.current_video_path = None
+        self.load_boss_video_info(boss.get('video_intro'))
+
     def new_boss(self):
         """Crée un nouveau boss"""
         self.current_boss = None
         self.current_sounds = {}
         self.clear_form()
         self.clear_boss_image()
+        self.clear_boss_video()
         # Réinitialiser les sons
         for sound_type in ['cri_guerre', 'cri_douleur_25', 'cri_douleur_50', 'cri_douleur_75', 'cri_agonie']:
             self.clear_boss_sound(sound_type)
@@ -6235,6 +6309,65 @@ class BossTab(QWidget):
         self.boss_image_preview.clear()
         self.boss_image_preview.setText("Aucune image\n\n📁 Glisser-déposer une image")
         self.current_image_path = None
+
+    def select_boss_video(self):
+        """Sélectionne une vidéo pour le boss"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Sélectionner une vidéo", "",
+            "Vidéos (*.mp4 *.webm *.mov *.avi *.mkv)"
+        )
+        if file_path:
+            file_size = Path(file_path).stat().st_size
+            if file_size > 100 * 1024 * 1024:
+                QMessageBox.warning(self, "Fichier trop volumineux", "La vidéo ne doit pas dépasser 100 MB")
+                return
+            self.current_video_path = file_path
+            file_name = os.path.basename(file_path)
+            size_mb = file_size / (1024 * 1024)
+            self.boss_video_preview.setText(f"🎬 {file_name}\n📦 {size_mb:.1f} MB\n✅ Prêt pour upload")
+            self.boss_video_preview.setStyleSheet("""
+                QLabel {
+                    background-color: #161b22;
+                    border: 2px solid #3fb950;
+                    border-radius: 8px;
+                    min-height: 100px;
+                    max-height: 100px;
+                    color: #3fb950;
+                }
+            """)
+
+    def clear_boss_video(self):
+        """Supprime la vidéo sélectionnée"""
+        self.current_video_path = None
+        self.boss_video_preview.setText("Aucune vidéo\n\n📁 Cliquer pour sélectionner")
+        self.boss_video_preview.setStyleSheet("""
+            QLabel {
+                background-color: #161b22;
+                border: 2px dashed #30363d;
+                border-radius: 8px;
+                min-height: 100px;
+                max-height: 100px;
+            }
+        """)
+
+    def load_boss_video_info(self, video_url):
+        """Affiche les infos de la vidéo existante"""
+        if video_url:
+            file_name = os.path.basename(video_url).split('?')[0]
+            self.boss_video_preview.setText(f"🎬 {file_name}\n🌐 Vidéo sur Cloudinary\n✅ En ligne")
+            self.boss_video_preview.setStyleSheet("""
+                QLabel {
+                    background-color: #161b22;
+                    border: 2px solid #1f6feb;
+                    border-radius: 8px;
+                    min-height: 100px;
+                    max-height: 100px;
+                    color: #58a6ff;
+                }
+            """)
+        else:
+            self.clear_boss_video()
+
     def save_boss(self):
         """Sauvegarde le boss avec ses sons"""
         try:
@@ -6305,6 +6438,17 @@ class BossTab(QWidget):
             if sound_updates:
                 self.api_client._make_request("POST", f"/admin/boss/{boss_id}/update-sound", json=sound_updates)
                 print(f"✅ Sons mis à jour: {sound_updates}")
+
+            # Upload de la vidéo si sélectionnée
+            if self.current_video_path:
+                print(f"📤 Upload vidéo boss: {self.current_video_path}")
+                video_url = self.api_client.upload_boss_video(boss_id, self.current_video_path)
+                if video_url:
+                    update_data = {"video_intro": video_url}
+                    self.api_client._make_request("POST", f"/admin/boss/{boss_id}/update-video", json=update_data)
+                    print(f"✅ Vidéo boss uploadée: {video_url}")
+                else:
+                    QMessageBox.warning(self, "Avertissement", "Le boss a été sauvegardé mais la vidéo n'a pas pu être uploadée")
 
             QMessageBox.information(self, "Succès", f"Boss {nom} sauvegardé avec succès!")
             self.load_boss_list()
