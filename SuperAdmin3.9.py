@@ -3945,27 +3945,15 @@ class MissionsTab(QWidget):
         self.mission_success_rate.setSuffix("%")
         self.mission_success_rate.setToolTip("Taux de réussite de la mission (0-100%)")
 
-        # NOUVEAU: Section missions de groupe
-        group_section = QGroupBox("🤝 Mission de Groupe")
-        group_layout = QFormLayout()
-        
-        self.mission_is_group = QCheckBox()
-        self.mission_is_group.toggled.connect(self.toggle_group_fields)
-        
-        self.mission_required_players = QLineEdit("3")
-        self.mission_required_players.setValidator(QIntValidator(1, 20))
-        
-        #Coordonnées de la mission
-        # REMPLACER les champs X et Y par un sélecteur visuel
+        # Sélecteur de case (disponible pour solo ET groupe)
         cell_selection_layout = QHBoxLayout()
         self.mission_group_x = QLineEdit()
         self.mission_group_x.setPlaceholderText("X")
         self.mission_group_x.setValidator(QIntValidator(0, 20))
         self.mission_group_y = QLineEdit()
-        self.mission_group_y.setPlaceholderText("Y") 
+        self.mission_group_y.setPlaceholderText("Y")
         self.mission_group_y.setValidator(QIntValidator(0, 20))
 
-        # Bouton pour ouvrir le sélecteur visuel
         self.select_cell_btn = QPushButton("🗺️ Sélectionner case")
         self.select_cell_btn.clicked.connect(self.open_cell_selector)
         self.select_cell_btn.setStyleSheet("background-color: #1f6feb; color: white;")
@@ -3975,24 +3963,39 @@ class MissionsTab(QWidget):
         cell_selection_layout.addWidget(QLabel("Y:"))
         cell_selection_layout.addWidget(self.mission_group_y)
         cell_selection_layout.addWidget(self.select_cell_btn)
-        
+
+        self.clear_cell_btn = QPushButton("❌")
+        self.clear_cell_btn.setFixedWidth(30)
+        self.clear_cell_btn.setToolTip("Effacer la position (mission au camp)")
+        self.clear_cell_btn.clicked.connect(lambda: (self.mission_group_x.clear(), self.mission_group_y.clear()))
+        cell_selection_layout.addWidget(self.clear_cell_btn)
+
+        # NOUVEAU: Section missions de groupe
+        group_section = QGroupBox("🤝 Mission de Groupe")
+        group_layout = QFormLayout()
+
+        self.mission_is_group = QCheckBox()
+        self.mission_is_group.toggled.connect(self.toggle_group_fields)
+
+        self.mission_required_players = QLineEdit("3")
+        self.mission_required_players.setValidator(QIntValidator(1, 20))
+
         self.mission_group_reward_combo = QComboBox()
         self.mission_group_reward_combo.setEditable(False)
-        
+
         self.mission_bonus_type = QComboBox()
         self.mission_bonus_type.addItems(["", "malus_reduction", "attack_bonus", "time_extension", "xp_boost"])
-        
+
         self.mission_bonus_value = QLineEdit("10")
         self.mission_bonus_value.setValidator(QIntValidator(0, 100))
         self.update_mission_success_rate_color(self.mission_success_rate.value())
-        
+
         group_layout.addRow("Mission de groupe:", self.mission_is_group)
         group_layout.addRow("Joueurs requis:", self.mission_required_players)
-        group_layout.addRow("Position:", cell_selection_layout) 
         group_layout.addRow("Récompense groupe:", self.mission_group_reward_combo)
         group_layout.addRow("Type de bonus:", self.mission_bonus_type)
         group_layout.addRow("Valeur bonus:", self.mission_bonus_value)
-        
+
         group_section.setLayout(group_layout)
 
         # Organisation du formulaire principal
@@ -4004,7 +4007,8 @@ class MissionsTab(QWidget):
         form_layout.addRow("Taux réussite:", self.mission_success_rate)  
         form_layout.addRow("Item récompense (solo):", self.mission_item_combo)
         form_layout.addRow("Quantité item", self.mission_item_qty)
-        
+        form_layout.addRow("📍 Position carte:", cell_selection_layout)
+
         # Ajouter la section groupe
         form_layout.addRow(group_section)
 
@@ -4094,13 +4098,6 @@ class MissionsTab(QWidget):
                 x, y = coords
                 self.mission_group_x.setText(str(x))
                 self.mission_group_y.setText(str(y))
-                
-                QMessageBox.information(
-                    self, 
-                    "Case sélectionnée", 
-                    f"✅ Case ({x}, {y}) sélectionnée pour la mission de groupe\n\n"
-                    f"La mission sera disponible sur cette case une fois sauvegardée."
-                )
 
     def update_mission_success_rate_color(self, value):
         """Met à jour la couleur du taux de réussite des missions"""
@@ -4128,8 +4125,6 @@ class MissionsTab(QWidget):
     def toggle_group_fields(self, enabled):
         """Active/désactive les champs des missions de groupe"""
         self.mission_required_players.setEnabled(enabled)
-        self.mission_group_x.setEnabled(enabled)
-        self.mission_group_y.setEnabled(enabled)
         self.mission_group_reward_combo.setEnabled(enabled)
         self.mission_bonus_type.setEnabled(enabled)
         self.mission_bonus_value.setEnabled(enabled)
@@ -4169,9 +4164,13 @@ class MissionsTab(QWidget):
             is_group = def_item.get("is_group_mission", False)
 
             # Icône et couleur selon le type
+            has_position = def_item.get("cell_x") is not None and def_item.get("cell_y") is not None
             if is_group:
                 icon = "🤝"
                 color = "#58a6ff"
+            elif has_position:
+                icon = "📍"
+                color = "#ff6b6b"
             else:
                 icon = "🎯"
                 color = "#8b949e"
@@ -4196,6 +4195,8 @@ class MissionsTab(QWidget):
             if is_group:
                 required_players = def_item.get("required_players", 1)
                 text += f", 👥{required_players} joueurs"
+            elif has_position:
+                text += f", 📍({def_item.get('cell_x')},{def_item.get('cell_y')})"
             text += ")"
 
             item_widget = QListWidgetItem(text)
@@ -4210,6 +4211,8 @@ class MissionsTab(QWidget):
             tooltip += f"🎲 Taux de réussite: {success_rate}%\n"  # NOUVEAU
             tooltip += f"📦 Item: {item if item else 'Aucun'}"
             
+            if has_position and not is_group:
+                tooltip += f"\n📍 Mission déportée: case ({def_item.get('cell_x')}, {def_item.get('cell_y')})"
             if is_group:
                 tooltip += f"\n🤝 Mission de groupe"
                 tooltip += f"\n👥 Joueurs requis: {def_item.get('required_players', 1)}"
@@ -4283,20 +4286,22 @@ class MissionsTab(QWidget):
         else:
             self.mission_item_combo.setCurrentIndex(0)
 
+        # Charger les coordonnées de la case (solo ET groupe)
+        cell_x = def_data.get("cell_x")
+        cell_y = def_data.get("cell_y")
+        self.mission_group_x.clear()
+        self.mission_group_y.clear()
+        if cell_x is not None:
+            self.mission_group_x.setText(str(cell_x))
+        if cell_y is not None:
+            self.mission_group_y.setText(str(cell_y))
+
         # Remplir les champs de groupe
         is_group = def_data.get("is_group_mission", False)
         self.mission_is_group.setChecked(is_group)
-        
+
         if is_group:
             self.mission_required_players.setText(str(def_data.get("required_players", 3)))
-            
-            # Charger les coordonnées de la case
-            cell_x = def_data.get("cell_x")
-            cell_y = def_data.get("cell_y")
-            if cell_x is not None:
-                self.mission_group_x.setText(str(cell_x))
-            if cell_y is not None:
-                self.mission_group_y.setText(str(cell_y))
             
             group_reward_item = def_data.get("group_reward_item", "")
             if group_reward_item:
@@ -4494,12 +4499,18 @@ class MissionsTab(QWidget):
             "reward_item_qty": int(self.mission_item_qty.text() or "1")
         }
 
+        # Gestion des coordonnées (disponible pour solo ET groupe)
+        x_text = self.mission_group_x.text().strip()
+        y_text = self.mission_group_y.text().strip()
+        if x_text and y_text:
+            def_data["cell_x"] = int(x_text)
+            def_data["cell_y"] = int(y_text)
+        else:
+            def_data["cell_x"] = None
+            def_data["cell_y"] = None
+
         # Données des missions de groupe
         if is_group:
-            # Gestion des coordonnées
-            x = self.mission_group_x.text().strip() or "0"
-            y = self.mission_group_y.text().strip() or "0"
-            
             def_data.update({
                 "is_group_mission": True,
                 "required_players": int(self.mission_required_players.text() or "3"),
@@ -4507,10 +4518,8 @@ class MissionsTab(QWidget):
                 "group_reward_qty": int(self.mission_item_qty.text() or "1"),
                 "bonus_type": self.mission_bonus_type.currentText() or None,
                 "bonus_value": int(self.mission_bonus_value.text() or "10"),
-                "cell_x": int(x),
-                "cell_y": int(y)
             })
-            
+
             print(f"💾 Mission GROUPE: {def_data}")
         else:
             def_data.update({
@@ -4528,8 +4537,11 @@ class MissionsTab(QWidget):
             QMessageBox.critical(self, "Erreur", f"Erreur lors de la sauvegarde: {result['error']}")
         else:
             success_message = f"Mission '{code}' enregistrée avec succès"
-            if is_group:
+            if def_data.get('cell_x') is not None:
                 success_message += f"\n\n📍 Position: ({def_data['cell_x']}, {def_data['cell_y']})"
+                if not is_group:
+                    success_message += " (mission déportée)"
+            if is_group:
                 if group_reward_item:
                     success_message += f"\n🎁 Récompense groupe: {group_reward_item}"
             else:
@@ -4569,6 +4581,8 @@ class MissionsTab(QWidget):
                 self.mission_xp.setText("10")
                 self.mission_item_combo.setCurrentIndex(0)
                 self.mission_item_qty.setText("1")
+                self.mission_group_x.clear()
+                self.mission_group_y.clear()
                 self.mission_is_group.setChecked(False)
 '''
 class SoloTab(QWidget):
@@ -4757,12 +4771,13 @@ class CellSelectorDialog(QDialog):
         self.cells_data = []
         self.map_data = {}
         self.existing_missions = []
+        self.solo_deportee_missions = []
         self.init_ui()
         self.load_map_data()
         self.load_existing_missions()
         
     def init_ui(self):
-        self.setWindowTitle("🗺️ Sélectionner une case pour la mission de groupe")
+        self.setWindowTitle("🗺️ Sélectionner une case pour la mission")
         
         # Taille dynamique basée sur l'écran
         screen_geometry = QApplication.primaryScreen().availableGeometry()
@@ -4788,9 +4803,10 @@ class CellSelectorDialog(QDialog):
         
         legends = [
             ("🏕️", "Camp"),
-            ("🟢", "Révélée"), 
+            ("🟢", "Révélée"),
             ("🔵", "Cachée"),
-            ("🔴", "Occupée"),
+            ("🔴", "Groupe"),
+            ("✖", "Solo déportée"),
             ("⭐", "Sélection")
         ]
         
@@ -4915,7 +4931,9 @@ class CellSelectorDialog(QDialog):
                     # CHARGER LES MISSIONS IMMÉDIATEMENT APRÈS LA CARTE
                     self.load_existing_missions()
                     self.display_grid()
-                    self.status_label.setText(f"✅ Carte chargée - {len(self.cells_data)} cases, {len(self.existing_missions)} missions")
+                    solo_count = len(self.solo_deportee_missions)
+                    group_count = len(self.existing_missions)
+                    self.status_label.setText(f"✅ Carte chargée - {len(self.cells_data)} cases, {group_count} groupe, {solo_count} solo déportées")
                 else:
                     self.status_label.setText("⚠️ Carte vide - Utilisation du mode manuel")
                     self.create_fallback_grid()
@@ -4928,26 +4946,31 @@ class CellSelectorDialog(QDialog):
             self.create_fallback_grid()
 
     def load_existing_missions(self):
-        """Charge les missions de groupe existantes - VERSION CORRIGÉE AVEC API MAP/RAW"""
+        """Charge les missions existantes (groupe depuis map/raw + solo déportées depuis defs)"""
         try:
-            print("🔍 Chargement des missions existantes depuis /api/map/raw...")
+            print("🔍 Chargement des missions existantes...")
             data = self.api_client._make_request("GET", "/api/map/raw")
-            
+
             if data and "group_missions" in data:
                 self.existing_missions = data.get("group_missions", [])
-                print(f"🎯 {len(self.existing_missions)} missions de groupe trouvées:")
-                for mission in self.existing_missions:
-                    x = mission.get('x')
-                    y = mission.get('y')
-                    code = mission.get('mission_code', 'Inconnue')
-                    name = mission.get('mission_name', 'Sans nom')
-                    print(f"   - {code} ({name}) sur ({x}, {y})")
+                print(f"🎯 {len(self.existing_missions)} missions de groupe trouvées")
             else:
-                print("❌ Aucune donnée de missions reçue")
                 self.existing_missions = []
+
+            # Charger aussi les missions solo déportées (avec cell_x/cell_y)
+            self.solo_deportee_missions = []
+            solo_data = self.api_client.get_solo_defs()
+            if solo_data and "defs" in solo_data:
+                for d in solo_data["defs"]:
+                    if not d.get("is_group_mission") and d.get("cell_x") is not None and d.get("cell_y") is not None:
+                        self.solo_deportee_missions.append(d)
+                        print(f"   📌 Solo déportée: {d.get('code')} sur ({d.get('cell_x')}, {d.get('cell_y')})")
+            print(f"🎯 {len(self.solo_deportee_missions)} missions solo déportées trouvées")
+
         except Exception as e:
             print(f"❌ Erreur chargement missions: {e}")
             self.existing_missions = []
+            self.solo_deportee_missions = []
 
     def validate_cell_selection(self, x, y):
         """Valide si une case peut être sélectionnée pour une mission de groupe"""
@@ -5074,7 +5097,18 @@ class CellSelectorDialog(QDialog):
                 if (x, y) not in mission_dict:
                     mission_dict[(x, y)] = []
                 mission_dict[(x, y)].append(mission)
-                print(f"📌 Mission trouvée: {mission.get('mission_code')} sur ({x}, {y})")
+                print(f"📌 Mission groupe: {mission.get('mission_code')} sur ({x}, {y})")
+
+        # Dictionnaire pour les missions solo déportées
+        solo_mission_dict = {}
+        for mission in self.solo_deportee_missions:
+            x = mission.get("cell_x")
+            y = mission.get("cell_y")
+            if x is not None and y is not None:
+                if (x, y) not in solo_mission_dict:
+                    solo_mission_dict[(x, y)] = []
+                solo_mission_dict[(x, y)].append(mission)
+                print(f"📌 Solo déportée: {mission.get('code')} sur ({x}, {y})")
         
         # Ajouter les en-têtes de colonnes (X)
         for x in range(min_x, max_x + 1):
@@ -5099,7 +5133,8 @@ class CellSelectorDialog(QDialog):
                 
                 # Vérifier si des missions existent sur cette case
                 existing_missions = mission_dict.get((x, y), [])
-                
+                existing_solo = solo_mission_dict.get((x, y), [])
+
                 cell_btn = QPushButton()
                 cell_btn.setFixedSize(cell_size, cell_size)
                 cell_btn.setProperty("coords", (x, y))
@@ -5154,7 +5189,35 @@ class CellSelectorDialog(QDialog):
                     cell_btn.setToolTip(tooltip)
                     self.grid_layout.addWidget(cell_btn, y - min_y + 1, x - min_x + 1)
                     continue
-                
+
+                # Case avec missions solo déportées - afficher un X rouge stylisé
+                if existing_solo:
+                    solo_count = len(existing_solo)
+                    cell_btn.setText("✖")
+                    cell_btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: #3d1114;
+                            border: 2px solid #da3633;
+                            border-radius: 3px;
+                            font-size: {max(14, cell_size//3)}px;
+                            color: #ff6b6b;
+                            font-weight: bold;
+                        }}
+                        QPushButton:hover {{
+                            background-color: #5a1a1e;
+                            border: 2px solid #ff6b6b;
+                        }}
+                    """)
+
+                    tooltip = f"✖ Case ({x},{y}) - {solo_count} mission(s) solo déportée(s)\n"
+                    for i, m in enumerate(existing_solo):
+                        tooltip += f"{i+1}. {m.get('code', '?')}: {m.get('name', 'Sans nom')} ({m.get('duration_sec', 0)}s, +{m.get('reward_xp', 0)} XP)\n"
+                    tooltip += "\n✅ Vous pouvez ajouter une mission sur cette case"
+
+                    cell_btn.setToolTip(tooltip)
+                    self.grid_layout.addWidget(cell_btn, y - min_y + 1, x - min_x + 1)
+                    continue
+
                 # Case normale
                 if cell:
                     status = cell.get('status', 'hidden')
