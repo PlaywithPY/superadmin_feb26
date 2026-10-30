@@ -7,7 +7,8 @@ import asyncio
 import threading
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import urljoin, urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -16,7 +17,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget, Q
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox,
                                QCheckBox, QTextEdit, QGroupBox, QFormLayout, QProgressBar,
                                QListWidget, QListWidgetItem, QMessageBox, QFrame, QGridLayout,
-                               QDialog, QTextEdit, QInputDialog, QSizePolicy, QSpinBox, QSpacerItem, QScrollArea, QFileDialog)
+                               QDialog, QTextEdit, QInputDialog, QSizePolicy, QSpinBox, QDoubleSpinBox,
+                               QSpacerItem, QScrollArea, QFileDialog, QTableWidget, QTableWidgetItem,
+                               QAbstractItemView)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPoint, QRect, QMetaObject, Q_ARG, Slot
 from PySide6.QtGui import QMouseEvent, QPainter, QColor, QIntValidator, QFont, QPalette, QIcon, QPixmap
 import requests
@@ -827,6 +830,168 @@ class APIClient:
         except Exception as e:
             print(f"❌ Erreur upload son: {e}")
             return None
+
+    # --- Échos (admin REST, Phase 120/120b de sqea-split) ---
+
+    def echo_get_choices(self):
+        return self._cached_get("/admin/echo/choices", cache_ttl=300)
+
+    def echo_get_players(self):
+        return self._cached_get("/admin/echo/players", cache_ttl=15)
+
+    def echo_get_player_echoes(self, login):
+        return self._make_request("GET", f"/admin/echo/players/{login}/echoes")
+
+    def echo_get_species(self):
+        return self._cached_get("/admin/echo/species", cache_ttl=15)
+
+    def echo_species_upsert(self, species_data):
+        self.invalidate_cache("/admin/echo/species")
+        return self._make_request("POST", "/admin/echo/species/upsert", json=species_data)
+
+    def echo_species_upload_image(self, species_code, image_path, variant="normal"):
+        """Upload réel vers Cloudinary — même patron que upload_item_image/upload_boss_image.
+        `variant` : "normal" ou "improbable" (visuel distinct, Phase 120c)."""
+        try:
+            with open(image_path, 'rb') as f:
+                files = {'image': (os.path.basename(image_path), f, 'image/png')}
+                data = {'variant': variant}
+                headers = {}
+                if self.jwt_token:
+                    headers['Authorization'] = f'Bearer {self.jwt_token}'
+                response = self.client.post(
+                    f"{self.backend_url}/admin/echo/species/{species_code}/upload-image",
+                    files=files, data=data, headers=headers, timeout=30.0
+                )
+                if response.status_code == 200:
+                    self.invalidate_cache("/admin/echo/species")
+                    return response.json().get('image_url')
+                print(f"❌ Erreur upload image espèce: {response.status_code} - {response.text}")
+                return None
+        except Exception as e:
+            print(f"❌ Erreur upload image espèce: {e}")
+            return None
+
+    def echo_get_traits(self):
+        return self._cached_get("/admin/echo/traits", cache_ttl=300)
+
+    def echo_get_blocklist(self, include_inactive=False):
+        return self._make_request("GET", "/admin/echo/blocklist",
+                                   params={"include_inactive": include_inactive})
+
+    def echo_get_active_encounters(self):
+        return self._make_request("GET", "/admin/echo/encounters")
+
+    def echo_get_encounter_history(self):
+        return self._make_request("GET", "/admin/echo/encounters/history")
+
+    def echo_get_player_liste(self, login):
+        return self._make_request("GET", f"/admin/echo/players/{login}/liste")
+
+    def echo_get_fiche(self, login, reference):
+        return self._make_request("GET", f"/admin/echo/players/{login}/echoes/{reference}/fiche")
+
+    def echo_get_moderation_panel(self):
+        return self._make_request("GET", "/admin/echo/moderation")
+
+    def echo_get_vitesse_status(self):
+        return self._make_request("GET", "/admin/echo/vitesse-test")
+
+    def echo_creer(self, species_code, target_login):
+        return self._make_request("POST", "/admin/echo/creer",
+                                   json={"species_code": species_code, "target_login": target_login})
+
+    def echo_creer_improbable(self, species_code, target_login):
+        return self._make_request("POST", "/admin/echo/creer-improbable",
+                                   json={"species_code": species_code, "target_login": target_login})
+
+    def echo_donner(self, target_login, item_code, quantite):
+        return self._make_request("POST", "/admin/echo/donner",
+                                   json={"target_login": target_login, "item_code": item_code,
+                                         "quantite": quantite})
+
+    def echo_niveau(self, target_login, reference, niveau, motif):
+        return self._make_request("POST", "/admin/echo/niveau",
+                                   json={"target_login": target_login, "reference": reference,
+                                         "niveau": niveau, "motif": motif})
+
+    def echo_renommer(self, target_login, reference, nom, motif):
+        return self._make_request("POST", "/admin/echo/renommer",
+                                   json={"target_login": target_login, "reference": reference,
+                                         "nom": nom, "motif": motif})
+
+    def echo_humeur(self, target_login, reference, mood, heures=0.0):
+        return self._make_request("POST", "/admin/echo/humeur",
+                                   json={"target_login": target_login, "reference": reference,
+                                         "mood": mood, "heures": heures})
+
+    def echo_fatigue(self, target_login, reference, cause):
+        return self._make_request("POST", "/admin/echo/fatigue",
+                                   json={"target_login": target_login, "reference": reference,
+                                         "cause": cause})
+
+    def echo_curieux(self, target_login, reference):
+        return self._make_request("POST", "/admin/echo/curieux",
+                                   json={"target_login": target_login, "reference": reference})
+
+    def echo_resonnant(self, target_login, reference):
+        return self._make_request("POST", "/admin/echo/resonnant",
+                                   json={"target_login": target_login, "reference": reference})
+
+    def echo_trait(self, target_login, reference, trait):
+        return self._make_request("POST", "/admin/echo/trait",
+                                   json={"target_login": target_login, "reference": reference,
+                                         "trait": trait})
+
+    def echo_reset_mystique(self, target_login, reference):
+        return self._make_request("POST", "/admin/echo/reset-mystique",
+                                   json={"target_login": target_login, "reference": reference})
+
+    def echo_lieu(self, x, y, qualite):
+        return self._make_request("POST", "/admin/echo/lieu",
+                                   json={"x": x, "y": y, "qualite": qualite})
+
+    def echo_rencontre(self, target_login, biome, multiplicateur=1.0):
+        return self._make_request("POST", "/admin/echo/rencontre",
+                                   json={"target_login": target_login, "biome": biome,
+                                         "multiplicateur": multiplicateur})
+
+    def echo_issue(self, target_login, outcome):
+        return self._make_request("POST", "/admin/echo/issue",
+                                   json={"target_login": target_login, "outcome": outcome})
+
+    def echo_vitesse(self, target_login, etat):
+        return self._make_request("POST", "/admin/echo/vitesse",
+                                   json={"target_login": target_login, "etat": etat})
+
+    def echo_diagnostic_salon(self):
+        return self._make_request("POST", "/admin/echo/diagnostic-salon")
+
+    def echo_moderation_ajouter(self, code, motif, correspondance="substring", locale=None):
+        self.invalidate_cache("/admin/echo/blocklist")
+        return self._make_request("POST", "/admin/echo/moderation/ajouter",
+                                   json={"code": code, "motif": motif,
+                                         "correspondance": correspondance, "locale": locale})
+
+    def echo_moderation_retirer(self, code):
+        self.invalidate_cache("/admin/echo/blocklist")
+        return self._make_request("POST", "/admin/echo/moderation/retirer", json={"code": code})
+
+    def echo_reset_general(self):
+        return self._make_request("POST", "/admin/echo/reset-general",
+                                   json={"confirmation": "CONFIRMER"})
+
+    # --- Comptes supprimés (résurrection) — endpoints pré-existants, pas Échos ---
+
+    def get_deleted_players(self, include_restored=False):
+        return self._make_request("GET", "/admin/deleted-players",
+                                   params={"include_restored": include_restored})
+
+    def get_deleted_player(self, archive_id):
+        return self._make_request("GET", f"/admin/deleted-players/{archive_id}")
+
+    def restore_deleted_player(self, archive_id):
+        return self._make_request("POST", f"/admin/deleted-players/{archive_id}/restore")
 
 
 # Section 4: Composants UI améliorés
@@ -7605,6 +7770,1402 @@ class SessionTab(QWidget):
         self.check_session()
 
 
+# Section 8bis: Échos (admin REST, sqea-split branche test-repo, Phase 120/120b)
+
+PARIS_TZ = ZoneInfo("Europe/Paris")
+
+
+def _parse_iso_datetime(value):
+    """Parse un TIMESTAMPTZ Postgres sérialisé en ISO 8601 par le backend.
+    `None` si absent/illisible plutôt qu'une levée — l'affichage retombe
+    sur "—", jamais sur un crash d'un simple champ manquant."""
+    if not value:
+        return None
+    try:
+        text = str(value)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _format_paris(dt):
+    """Format simple `JJ/MM/AAAA HH:MM`, fuseau Europe/Paris (DST géré par zoneinfo)."""
+    if dt is None:
+        return "—"
+    return dt.astimezone(PARIS_TZ).strftime("%d/%m/%Y %H:%M")
+
+
+def _format_countdown(expires_at):
+    """Décompte lisible jusqu'à expiration, ou "Expirée" si déjà passée."""
+    if expires_at is None:
+        return "—"
+    seconds = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+    if seconds <= 0:
+        return "⏰ Expirée"
+    hours, rest = divmod(seconds, 3600)
+    minutes, sec = divmod(rest, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {sec:02d}s"
+    return f"{sec}s"
+
+
+class _SortableItem(QTableWidgetItem):
+    """QTableWidgetItem qui trie sur une valeur réelle (datetime, secondes...)
+    plutôt que sur le texte affiché — nécessaire dès que l'affichage n'est
+    pas lexicographiquement ordonné comme la vraie valeur (JJ/MM/AAAA, ou
+    "9s" vs "12s" qui trieraient faux en texte)."""
+
+    def __init__(self, text, sort_key):
+        super().__init__(text)
+        self.sort_key = sort_key
+
+    def __lt__(self, other):
+        if isinstance(other, _SortableItem) and self.sort_key is not None and other.sort_key is not None:
+            return self.sort_key < other.sort_key
+        return super().__lt__(other)
+
+
+def _echo_result_ok(parent, result, ok_message=None, quiet=False):
+    """Interprète le retour de _make_request (None=401, {"error":...}=HTTP/exception,
+    ou {"success": bool, ...}=réponse applicative) et affiche l'erreur le cas échéant.
+
+    `quiet=True` pour les chargements automatiques (au lancement de l'onglet,
+    avant tout login) : pas de popup bloquant, juste la console — même
+    convention que CoffreTab.load_coffre, qui se contente d'un label."""
+    if result is None:
+        if not quiet:
+            QMessageBox.warning(parent, "Erreur", "Pas de réponse du serveur (JWT expiré ?)")
+        else:
+            print("⚠️ Échos: pas de réponse du serveur (JWT absent/expiré ?)")
+        return False
+    if isinstance(result, dict) and "error" in result and "success" not in result:
+        message = str(result.get("message") or result["error"])
+        if not quiet:
+            QMessageBox.critical(parent, "Erreur", message)
+        else:
+            print(f"⚠️ Échos: {message}")
+        return False
+    if isinstance(result, dict) and not result.get("success", True):
+        message = str(result.get("error") or "Erreur inconnue")
+        if not quiet:
+            QMessageBox.critical(parent, "Erreur", message)
+        else:
+            print(f"⚠️ Échos: {message}")
+        return False
+    if ok_message:
+        QMessageBox.information(parent, "Succès", ok_message)
+    return True
+
+
+def _echo_action_ok(parent, result):
+    """Pour les endpoints d'action qui enveloppent un `_core` du panneau
+    Discord : le HTTP 200 + `success: true` ne dit RIEN sur si l'action a
+    réellement eu lieu. Le `_core` répond toujours en texte (`actx.text()`)
+    SANS jamais lever d'exception sur un refus — rencontre déjà active,
+    biome inconnu, pas admin, etc. — préfixé "❌" par convention constante
+    dans tout `commands.py`. Sans cette lecture, un refus silencieux
+    s'affichait comme un "Succès" trompeur (cf. retour utilisateur :
+    "rencontre" renvoyait succès trois fois sans jamais rien créer).
+
+    Retourne `(ok: bool, message: str)` — n'affiche PAS de popup de succès
+    (le texte, déjà affiché par l'appelant, suffit) ; affiche un
+    avertissement si le message signale un refus."""
+    if not _echo_result_ok(parent, result):
+        return False, ""
+    message = result.get("message", "") if isinstance(result, dict) else ""
+    if message.strip().startswith("❌"):
+        QMessageBox.warning(parent, "Refusé", message)
+        return False, message
+    return True, message
+
+
+class EchosJoueursTab(QWidget):
+    """Actions admin sur un Écho/joueur donné (pages Échos + État du panneau Discord)."""
+
+    def __init__(self, api_client):
+        super().__init__()
+        self.api_client = api_client
+        self.species_choices = []   # [(code, label)]
+        self.species_by_code = {}  # code -> dict complet (image_url, image_url_improbable...)
+        self.item_choices = []
+        self.mood_choices = []
+        self.fatigue_choices = []
+        self.trait_choices = []
+        self.init_ui()
+        self.load_choices()
+        self.load_players()
+
+    def init_ui(self):
+        outer = QVBoxLayout(self)
+        title = QLabel("🐣 ÉCHOS — JOUEURS")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffd700;")
+        outer.addWidget(title)
+
+        # Rappel permanent, HORS de la zone défilante : toutes les actions
+        # plus bas (Niveau, Renommer, Humeur, Fatigue, Trait, Curieux,
+        # Résonnant, Reset mystique) s'appliquent à CET Écho — sans ce
+        # rappel visible même en scrollant, rien ne le rappelait une fois
+        # sorti du bloc "Cible" (retour utilisateur).
+        target_banner = QHBoxLayout()
+        # Petite (48px) — volontairement plus discrète que l'aperçu de
+        # l'annonce de rencontre (200px) : ici c'est un repère, pas le sujet.
+        self.target_image_preview = QLabel()
+        self.target_image_preview.setFixedSize(48, 48)
+        self.target_image_preview.setAlignment(Qt.AlignCenter)
+        self.target_image_preview.setStyleSheet(
+            "background-color: #0d1117; border-radius: 6px;")
+        target_banner.addWidget(self.target_image_preview)
+        self.current_target_label = QLabel("🎯 Aucun Écho ciblé — choisis un joueur puis un Écho ci-dessous")
+        self.current_target_label.setStyleSheet(
+            "background-color: #1f6feb; color: white; font-weight: bold; "
+            "padding: 6px; border-radius: 6px;")
+        self.current_target_label.setWordWrap(True)
+        target_banner.addWidget(self.current_target_label, 1)
+        outer.addLayout(target_banner)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+
+        # --- Sélection joueur / Écho ---
+        select_group = QGroupBox("🎯 Cible — s'applique à TOUTES les actions ci-dessous")
+        select_form = QFormLayout()
+        self.player_combo = QComboBox()
+        self.player_combo.setEditable(True)
+        self.player_combo.currentTextChanged.connect(self.load_player_echoes)
+        refresh_players_btn = QPushButton("🔄")
+        refresh_players_btn.setFixedWidth(40)
+        refresh_players_btn.clicked.connect(self.load_players)
+        player_row = QHBoxLayout()
+        player_row.addWidget(self.player_combo, 1)
+        player_row.addWidget(refresh_players_btn)
+        select_form.addRow("Joueur (login) :", player_row)
+
+        self.echo_combo = QComboBox()
+        self.echo_combo.currentIndexChanged.connect(self._update_target_label)
+        refresh_echoes_btn = QPushButton("🔄")
+        refresh_echoes_btn.setFixedWidth(40)
+        refresh_echoes_btn.setToolTip("Recharger les Échos de ce joueur")
+        refresh_echoes_btn.clicked.connect(self.load_player_echoes)
+        echo_row = QHBoxLayout()
+        echo_row.addWidget(self.echo_combo, 1)
+        echo_row.addWidget(refresh_echoes_btn)
+        select_form.addRow("Écho ciblé :", echo_row)
+        hint = QLabel("↑ requis pour Niveau, Renommer, Humeur, Fatigue, Trait, "
+                      "Curieux, Résonnant et Reset mystique plus bas")
+        hint.setStyleSheet("color: #8b949e; font-style: italic;")
+        hint.setWordWrap(True)
+        select_form.addRow("", hint)
+
+        view_row = QHBoxLayout()
+        view_liste_btn = QPushButton("📋 Voir la liste")
+        view_liste_btn.clicked.connect(self.view_player_liste)
+        view_fiche_btn = QPushButton("🔍 Voir la fiche")
+        view_fiche_btn.clicked.connect(self.view_echo_fiche)
+        view_row.addWidget(view_liste_btn)
+        view_row.addWidget(view_fiche_btn)
+        select_form.addRow("", view_row)
+        select_group.setLayout(select_form)
+        layout.addWidget(select_group)
+
+        self.display_area = QTextEdit()
+        self.display_area.setReadOnly(True)
+        self.display_area.setMinimumHeight(140)
+        layout.addWidget(self.display_area)
+
+        layout.addWidget(self._build_creer_group())
+        layout.addWidget(self._build_donner_group())
+        layout.addWidget(self._build_niveau_group())
+        layout.addWidget(self._build_renommer_group())
+        layout.addWidget(self._build_etat_group())
+        layout.addStretch()
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+    def _build_creer_group(self):
+        group = QGroupBox("🥚 Créer un Écho")
+        form = QFormLayout()
+        self.creer_species_combo = QComboBox()
+        form.addRow("Espèce :", self.creer_species_combo)
+        self.creer_improbable_check = QCheckBox("Improbable (rare, pour tester une Singularité)")
+        form.addRow("", self.creer_improbable_check)
+        btn = QPushButton("🥚 Créer pour le joueur ciblé")
+        btn.clicked.connect(self.do_creer)
+        form.addRow("", btn)
+        group.setLayout(form)
+        return group
+
+    def _build_donner_group(self):
+        group = QGroupBox("🎁 Donner un objet")
+        form = QFormLayout()
+        self.donner_item_combo = QComboBox()
+        form.addRow("Objet :", self.donner_item_combo)
+        self.donner_qty_spin = QSpinBox()
+        self.donner_qty_spin.setRange(1, 999)
+        self.donner_qty_spin.setValue(5)
+        form.addRow("Quantité :", self.donner_qty_spin)
+        btn = QPushButton("🎁 Donner")
+        btn.clicked.connect(self.do_donner)
+        form.addRow("", btn)
+        group.setLayout(form)
+        return group
+
+    def _build_niveau_group(self):
+        group = QGroupBox("🎚️ Forcer le Niveau (de l'Écho ciblé ci-dessus)")
+        form = QFormLayout()
+        self.niveau_spin = QSpinBox()
+        self.niveau_spin.setRange(1, 99)
+        form.addRow("Niveau visé :", self.niveau_spin)
+        self.niveau_motif = QLineEdit()
+        self.niveau_motif.setPlaceholderText("Pourquoi cette correction ? (obligatoire, journalisé)")
+        form.addRow("Motif :", self.niveau_motif)
+        btn = QPushButton("🎚️ Forcer le niveau")
+        btn.clicked.connect(self.do_niveau)
+        form.addRow("", btn)
+        group.setLayout(form)
+        return group
+
+    def _build_renommer_group(self):
+        group = QGroupBox("✏️ Corriger un nom (de l'Écho ciblé ci-dessus)")
+        form = QFormLayout()
+        self.renommer_nom = QLineEdit()
+        form.addRow("Nouveau nom :", self.renommer_nom)
+        self.renommer_motif = QLineEdit()
+        self.renommer_motif.setPlaceholderText("Pourquoi cette correction ? (obligatoire, journalisé)")
+        form.addRow("Motif :", self.renommer_motif)
+        btn = QPushButton("✏️ Renommer")
+        btn.clicked.connect(self.do_renommer)
+        form.addRow("", btn)
+        group.setLayout(form)
+        return group
+
+    def _build_etat_group(self):
+        group = QGroupBox("🔮 État mystique / Humeur (de l'Écho ciblé ci-dessus)")
+        form = QFormLayout()
+
+        self.humeur_combo = QComboBox()
+        self.humeur_heures = QDoubleSpinBox()
+        self.humeur_heures.setRange(0, 999)
+        humeur_row = QHBoxLayout()
+        humeur_btn = QPushButton("Forcer")
+        humeur_btn.clicked.connect(self.do_humeur)
+        humeur_row.addWidget(self.humeur_combo, 1)
+        humeur_row.addWidget(QLabel("heures écoulées :"))
+        humeur_row.addWidget(self.humeur_heures)
+        humeur_row.addWidget(humeur_btn)
+        form.addRow("😔 Humeur :", humeur_row)
+
+        self.fatigue_combo = QComboBox()
+        fatigue_btn = QPushButton("Forcer")
+        fatigue_btn.clicked.connect(self.do_fatigue)
+        fatigue_row = QHBoxLayout()
+        fatigue_row.addWidget(self.fatigue_combo, 1)
+        fatigue_row.addWidget(fatigue_btn)
+        form.addRow("🥱 Fatigue :", fatigue_row)
+
+        self.trait_combo = QComboBox()
+        trait_btn = QPushButton("Poser")
+        trait_btn.clicked.connect(self.do_trait)
+        trait_row = QHBoxLayout()
+        trait_row.addWidget(self.trait_combo, 1)
+        trait_row.addWidget(trait_btn)
+        form.addRow("🧬 Trait :", trait_row)
+
+        toggles_row = QHBoxLayout()
+        curieux_btn = QPushButton("🔎 Forcer Curieux")
+        curieux_btn.clicked.connect(self.do_curieux)
+        resonnant_btn = QPushButton("💠 Forcer Résonnant")
+        resonnant_btn.clicked.connect(self.do_resonnant)
+        reset_btn = QPushButton("🧹 Reset mystique")
+        reset_btn.clicked.connect(self.do_reset_mystique)
+        toggles_row.addWidget(curieux_btn)
+        toggles_row.addWidget(resonnant_btn)
+        toggles_row.addWidget(reset_btn)
+        form.addRow("", toggles_row)
+
+        group.setLayout(form)
+        return group
+
+    # --- Chargement des listes ---
+
+    def load_choices(self):
+        data = self.api_client.echo_get_choices()
+        if not _echo_result_ok(self, data, quiet=True):
+            return
+        self.item_choices = [(c["value"], c["label"]) for c in data.get("objet", [])]
+        self.mood_choices = [(c["value"], c["label"]) for c in data.get("humeur", [])]
+        self.fatigue_choices = [(c["value"], c["label"]) for c in data.get("cause_fatigue", [])]
+        self._fill_combo(self.donner_item_combo, self.item_choices)
+        self._fill_combo(self.humeur_combo, self.mood_choices)
+        self._fill_combo(self.fatigue_combo, self.fatigue_choices)
+
+        species_data = self.api_client.echo_get_species()
+        if _echo_result_ok(self, species_data, quiet=True):
+            species = species_data.get("species", [])
+            self.species_by_code = {s["species_code"]: s for s in species}
+            self.species_choices = [
+                (s["species_code"],
+                 f"{s['species_code']} — {s['display_name']}" + ("" if s.get("launch_available") else " (en devenir)"))
+                for s in species
+            ]
+            self._fill_combo(self.creer_species_combo, self.species_choices)
+            self._update_target_image()
+
+        traits_data = self.api_client.echo_get_traits()
+        if _echo_result_ok(self, traits_data, quiet=True):
+            traits = traits_data.get("traits", [])
+            self.trait_choices = [(t["trait_code"], f"{t['trait_code']} — {t['display_name']}") for t in traits]
+            self._fill_combo(self.trait_combo, self.trait_choices)
+
+    def _fill_combo(self, combo, choices):
+        combo.clear()
+        for value, label in choices:
+            combo.addItem(label, value)
+
+    def load_players(self):
+        data = self.api_client.echo_get_players()
+        if not _echo_result_ok(self, data, quiet=True):
+            return
+        current = self.player_combo.currentText()
+        self.player_combo.blockSignals(True)
+        self.player_combo.clear()
+        self.player_combo.addItems(data.get("players", []))
+        self.player_combo.setCurrentText(current)
+        self.player_combo.blockSignals(False)
+
+    def load_player_echoes(self):
+        """Déclenché à chaque frappe dans le combo éditable — doit rester
+        silencieux, sinon un login en cours de saisie spamme des popups."""
+        login = self.player_combo.currentText().strip()
+        self.echo_combo.clear()
+        if not login:
+            return
+        data = self.api_client.echo_get_player_echoes(login)
+        if not _echo_result_ok(self, data, quiet=True):
+            return
+        for e in data.get("echoes", []):
+            label = f"{e.get('individual_name') or e.get('species_code')} (Niv.{e.get('level', '?')})"
+            if e.get("is_active_echo"):
+                label += " ⭐"
+            self.echo_combo.addItem(label, e)  # dict complet : espèce + is_improbable, pas que l'id
+        self._update_target_label()
+
+    def _update_target_label(self):
+        """Rappel permanent de la cible actuelle — visible même en ayant
+        scrollé jusqu'aux sections Niveau/Renommer/État plus bas."""
+        login = self.player_combo.currentText().strip()
+        if not login or self.echo_combo.count() == 0:
+            self.current_target_label.setText(
+                "🎯 Aucun Écho ciblé — choisis un joueur puis un Écho ci-dessus")
+        else:
+            echo_label = self.echo_combo.currentText()
+            if not echo_label:
+                self.current_target_label.setText(f"🎯 Joueur : {login} — choisis un Écho ci-dessus")
+            else:
+                self.current_target_label.setText(f"🎯 Écho ciblé : {echo_label}  (joueur : {login})")
+        self._update_target_image()
+
+    def _update_target_image(self):
+        """Image de l'Écho ciblé — variante improbable si c'est le cas.
+        Petite (48px) à dessein : ici c'est un repère de contexte, pas le
+        sujet (contrairement à l'annonce de rencontre, 200px). Pas de
+        secret à respecter ici (contrairement au salon public Discord) :
+        l'admin voit toujours la vraie variante de CET Écho précis."""
+        echo = self.echo_combo.currentData()
+        species = self.species_by_code.get(echo.get("species_code")) if echo else None
+        if not species:
+            self.target_image_preview.clear()
+            return
+        image_url = (species.get("image_url_improbable") if echo.get("is_improbable")
+                     else species.get("image_url"))
+        if not image_url:
+            self.target_image_preview.clear()
+            return
+        try:
+            response = self.api_client.client.get(image_url, timeout=10.0)
+            if response.status_code == 200:
+                pixmap = QPixmap()
+                pixmap.loadFromData(response.content)
+                if not pixmap.isNull():
+                    scaled = pixmap.scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self.target_image_preview.setPixmap(scaled)
+        except Exception as e:
+            print(f"❌ Erreur chargement image Écho ciblé: {e}")
+
+    def _current_login(self):
+        login = self.player_combo.currentText().strip()
+        if not login:
+            QMessageBox.warning(self, "Erreur", "Sélectionne ou saisis un joueur")
+            return None
+        return login
+
+    def _current_reference(self, required=True):
+        echo = self.echo_combo.currentData()
+        ref = echo.get("echo_id") if echo else None
+        if required and not ref:
+            QMessageBox.warning(self, "Erreur", "Sélectionne un Écho (bouton 🔄 si la liste est vide)")
+        return ref
+
+    # --- Actions ---
+
+    def view_player_liste(self):
+        login = self._current_login()
+        if not login:
+            return
+        data = self.api_client.echo_get_player_liste(login)
+        if _echo_result_ok(self, data):
+            self.display_area.setPlainText(data.get("message", "(vide)"))
+
+    def view_echo_fiche(self):
+        login = self._current_login()
+        reference = self._current_reference()
+        if not login or not reference:
+            return
+        data = self.api_client.echo_get_fiche(login, reference)
+        if _echo_result_ok(self, data):
+            self.display_area.setPlainText(data.get("message", "(vide)"))
+
+    def do_creer(self):
+        login = self._current_login()
+        if not login:
+            return
+        species_code = self.creer_species_combo.currentData()
+        if not species_code:
+            QMessageBox.warning(self, "Erreur", "Choisis une espèce")
+            return
+        if self.creer_improbable_check.isChecked():
+            result = self.api_client.echo_creer_improbable(species_code, login)
+        else:
+            result = self.api_client.echo_creer(species_code, login)
+        ok, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+        if ok:
+            self.load_player_echoes()
+
+    def do_donner(self):
+        login = self._current_login()
+        if not login:
+            return
+        item_code = self.donner_item_combo.currentData()
+        if not item_code:
+            QMessageBox.warning(self, "Erreur", "Choisis un objet")
+            return
+        result = self.api_client.echo_donner(login, item_code, self.donner_qty_spin.value())
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_niveau(self):
+        login, reference = self._current_login(), self._current_reference()
+        if not login or not reference:
+            return
+        motif = self.niveau_motif.text().strip()
+        if not motif:
+            QMessageBox.warning(self, "Erreur", "Le motif est obligatoire (journalisé)")
+            return
+        result = self.api_client.echo_niveau(login, reference, self.niveau_spin.value(), motif)
+        ok, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+        if ok:
+            self.load_player_echoes()
+
+    def do_renommer(self):
+        login, reference = self._current_login(), self._current_reference()
+        if not login or not reference:
+            return
+        nom = self.renommer_nom.text().strip()
+        motif = self.renommer_motif.text().strip()
+        if not nom or not motif:
+            QMessageBox.warning(self, "Erreur", "Nom et motif sont obligatoires")
+            return
+        result = self.api_client.echo_renommer(login, reference, nom, motif)
+        ok, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+        if ok:
+            self.load_player_echoes()
+
+    def do_humeur(self):
+        login, reference = self._current_login(), self._current_reference()
+        if not login or not reference:
+            return
+        mood = self.humeur_combo.currentData()
+        result = self.api_client.echo_humeur(login, reference, mood, self.humeur_heures.value())
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_fatigue(self):
+        login, reference = self._current_login(), self._current_reference()
+        if not login or not reference:
+            return
+        cause = self.fatigue_combo.currentData()
+        result = self.api_client.echo_fatigue(login, reference, cause)
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_trait(self):
+        login, reference = self._current_login(), self._current_reference()
+        if not login or not reference:
+            return
+        trait = self.trait_combo.currentData()
+        result = self.api_client.echo_trait(login, reference, trait)
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_curieux(self):
+        login, reference = self._current_login(), self._current_reference()
+        if not login or not reference:
+            return
+        result = self.api_client.echo_curieux(login, reference)
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_resonnant(self):
+        login, reference = self._current_login(), self._current_reference()
+        if not login or not reference:
+            return
+        result = self.api_client.echo_resonnant(login, reference)
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_reset_mystique(self):
+        login, reference = self._current_login(), self._current_reference()
+        if not login or not reference:
+            return
+        result = self.api_client.echo_reset_mystique(login, reference)
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+
+class EchosCatalogueTab(QWidget):
+    """Catalogue des espèces d'Échos : création/édition + images normale/improbable
+    (Phase 120/120b/120c)."""
+
+    def __init__(self, api_client):
+        super().__init__()
+        self.api_client = api_client
+        self.current_species_code = None  # None = nouvelle espèce
+        self.current_image_path = {"normal": None, "improbable": None}  # fichiers locaux en attente d'upload
+        self.species_image_preview = {}  # rempli dans _build_image_group
+        self.init_ui()
+        self.load_species_list()
+
+    def init_ui(self):
+        outer = QVBoxLayout(self)
+        title = QLabel("📚 ÉCHOS — CATALOGUE D'ESPÈCES")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffd700;")
+        outer.addWidget(title)
+
+        main_row = QHBoxLayout()
+
+        # --- Liste des espèces ---
+        list_col = QVBoxLayout()
+        list_header = QHBoxLayout()
+        list_header.addWidget(QLabel("Espèces (clic pour éditer) :"))
+        refresh_btn = QPushButton("🔄")
+        refresh_btn.setFixedWidth(40)
+        refresh_btn.clicked.connect(self.load_species_list)
+        list_header.addWidget(refresh_btn)
+        list_col.addLayout(list_header)
+        self.species_list = QListWidget()
+        self.species_list.itemClicked.connect(self.load_species_into_form)
+        list_col.addWidget(self.species_list)
+        new_btn = QPushButton("🆕 Nouvelle espèce")
+        new_btn.clicked.connect(self.new_species)
+        list_col.addWidget(new_btn)
+        main_row.addLayout(list_col, 1)
+
+        # --- Formulaire ---
+        form_col = QVBoxLayout()
+        form_group = QGroupBox("Fiche espèce")
+        form = QFormLayout()
+        self.species_code_input = QLineEdit()
+        self.species_code_input.setPlaceholderText("ex: SYL-01")
+        form.addRow("Code (clé) :", self.species_code_input)
+        self.family_code_input = QLineEdit()
+        self.family_code_input.setPlaceholderText("ex: SYL")
+        form.addRow("Famille :", self.family_code_input)
+        self.display_name_input = QLineEdit()
+        form.addRow("Nom affiché :", self.display_name_input)
+        self.bestiary_label_input = QLineEdit()
+        form.addRow("Libellé bestiaire :", self.bestiary_label_input)
+        self.rarity_combo = QComboBox()
+        self.rarity_combo.addItem("Commune", "commune")
+        self.rarity_combo.addItem("Rare", "rare")
+        form.addRow("Rareté :", self.rarity_combo)
+        self.launch_available_check = QCheckBox("Disponible en rencontre (décoché = « en devenir »)")
+        form.addRow("", self.launch_available_check)
+        form_group.setLayout(form)
+        form_col.addWidget(form_group)
+
+        # --- Images : normale + improbable (visuels distincts, Phase 120c) ---
+        form_col.addWidget(self._build_image_group("normal", "🖼️ Image (normale)"))
+        form_col.addWidget(self._build_image_group("improbable", "✨ Image (variante improbable)"))
+
+        save_btn = QPushButton("💾 Sauvegarder l'espèce")
+        save_btn.clicked.connect(self.save_species)
+        form_col.addWidget(save_btn)
+
+        main_row.addLayout(form_col, 2)
+        outer.addLayout(main_row)
+
+    # --- Chargement ---
+
+    def load_species_list(self):
+        data = self.api_client.echo_get_species()
+        if not _echo_result_ok(self, data, quiet=True):
+            return
+        self.species_list.clear()
+        for s in data.get("species", []):
+            label = f"{s['species_code']} — {s['display_name']} ({s['rarity']})"
+            if not s.get("launch_available"):
+                label += "  🚧 en devenir"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, s)
+            self.species_list.addItem(item)
+
+    def load_species_into_form(self, item):
+        s = item.data(Qt.UserRole)
+        self.current_species_code = s["species_code"]
+        self.current_image_path = {"normal": None, "improbable": None}
+        self.species_code_input.setText(s["species_code"])
+        self.family_code_input.setText(s["family_code"])
+        self.display_name_input.setText(s["display_name"])
+        self.bestiary_label_input.setText(s["bestiary_label"])
+        self.rarity_combo.setCurrentIndex(0 if s["rarity"] == "commune" else 1)
+        self.launch_available_check.setChecked(bool(s.get("launch_available")))
+        for which in ("normal", "improbable"):
+            image_url = s.get("image_url" if which == "normal" else "image_url_improbable")
+            if image_url:
+                self.load_species_image(which, image_url)
+            else:
+                self.clear_species_image(which)
+
+    def new_species(self):
+        self.current_species_code = None
+        self.current_image_path = {"normal": None, "improbable": None}
+        self.species_code_input.clear()
+        self.family_code_input.clear()
+        self.display_name_input.clear()
+        self.bestiary_label_input.clear()
+        self.rarity_combo.setCurrentIndex(0)
+        self.launch_available_check.setChecked(False)
+        for which in ("normal", "improbable"):
+            self.clear_species_image(which)
+
+    # --- Image (normale et improbable partagent la même logique, Phase 120c) ---
+
+    def _build_image_group(self, which, title):
+        group = QGroupBox(title)
+        layout = QVBoxLayout()
+        preview = QLabel("Aucune image\n\n📁 Glisser-déposer une image")
+        preview.setAlignment(Qt.AlignCenter)
+        preview.setWordWrap(True)
+        preview.setAcceptDrops(True)
+        preview.setStyleSheet("""
+            QLabel {
+                background-color: #0d1117;
+                border: 2px dashed #30363d;
+                border-radius: 8px;
+                min-height: 150px;
+                max-height: 150px;
+            }
+        """)
+        preview.mousePressEvent = lambda event, w=which: self.select_species_image(w, event)
+        preview.dragEnterEvent = self.drag_enter_event
+        preview.dropEvent = lambda event, w=which: self.drop_species_image(w, event)
+        self.species_image_preview[which] = preview
+        layout.addWidget(preview)
+
+        btn_row = QHBoxLayout()
+        select_btn = QPushButton("📁 Sélectionner image")
+        select_btn.clicked.connect(lambda checked=False, w=which: self.select_species_image(w))
+        clear_btn = QPushButton("🗑️ Supprimer")
+        clear_btn.setStyleSheet("background-color: #da3633;")
+        clear_btn.clicked.connect(lambda checked=False, w=which: self.clear_species_image(w))
+        btn_row.addWidget(select_btn)
+        btn_row.addWidget(clear_btn)
+        layout.addLayout(btn_row)
+        group.setLayout(layout)
+        return group
+
+    def select_species_image(self, which, event=None):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Sélectionner une image", "", "Images (*.png *.jpg *.jpeg)"
+        )
+        if file_path:
+            self._load_image_preview(which, file_path)
+
+    def drag_enter_event(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def drop_species_image(self, which, event):
+        urls = event.mimeData().urls()
+        if urls and urls[0].isLocalFile():
+            file_path = urls[0].toLocalFile()
+            if file_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                self._load_image_preview(which, file_path)
+                event.acceptProposedAction()
+
+    def _load_image_preview(self, which, file_path):
+        try:
+            pixmap = QPixmap(file_path)
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(200, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.species_image_preview[which].setPixmap(scaled)
+                self.current_image_path[which] = file_path
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Impossible de charger l'image: {str(e)}")
+
+    def load_species_image(self, which, image_url):
+        try:
+            response = self.api_client.client.get(image_url, timeout=10.0)
+            if response.status_code == 200:
+                pixmap = QPixmap()
+                pixmap.loadFromData(response.content)
+                if not pixmap.isNull():
+                    scaled = pixmap.scaled(200, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self.species_image_preview[which].setPixmap(scaled)
+        except Exception as e:
+            print(f"❌ Erreur chargement image espèce ({which}): {e}")
+
+    def clear_species_image(self, which):
+        preview = self.species_image_preview[which]
+        preview.clear()
+        preview.setText("Aucune image\n\n📁 Glisser-déposer une image")
+        self.current_image_path[which] = None
+
+    # --- Sauvegarde ---
+
+    def save_species(self):
+        species_code = self.species_code_input.text().strip().upper()
+        family_code = self.family_code_input.text().strip().upper()
+        display_name = self.display_name_input.text().strip()
+        bestiary_label = self.bestiary_label_input.text().strip()
+        if not species_code or not family_code or not display_name or not bestiary_label:
+            QMessageBox.warning(self, "Erreur", "Code, famille, nom affiché et libellé bestiaire sont obligatoires")
+            return
+
+        payload = {
+            "species_code": species_code,
+            "family_code": family_code,
+            "display_name": display_name,
+            "bestiary_label": bestiary_label,
+            "rarity": self.rarity_combo.currentData(),
+            "launch_available": self.launch_available_check.isChecked(),
+        }
+        result = self.api_client.echo_species_upsert(payload)
+        if not _echo_result_ok(self, result):
+            return
+
+        for which in ("normal", "improbable"):
+            path = self.current_image_path.get(which)
+            if path:
+                image_url = self.api_client.echo_species_upload_image(species_code, path, variant=which)
+                if not image_url:
+                    QMessageBox.warning(self, "Attention",
+                                         f"Espèce sauvegardée, mais l'upload de l'image ({which}) a échoué.")
+
+        self.current_species_code = species_code
+        self.current_image_path = {"normal": None, "improbable": None}
+        QMessageBox.information(self, "Succès", f"Espèce {species_code} sauvegardée.")
+        self.load_species_list()
+
+
+class EchosMondeTab(QWidget):
+    """Lieux, rencontres, vitesse de test, blocklist et reset général (page Monde)."""
+
+    def __init__(self, api_client):
+        super().__init__()
+        self.api_client = api_client
+        self.qualite_choices = []
+        self.biome_choices = []
+        self.outcome_choices = []
+        self.correspondance_choices = []
+        self.init_ui()
+        self.load_choices()
+        self.load_players()
+        self.load_blocklist()
+
+    def init_ui(self):
+        outer = QVBoxLayout(self)
+        title = QLabel("🌍 ÉCHOS — MONDE")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffd700;")
+        outer.addWidget(title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+
+        self.player_combo = QComboBox()
+        self.player_combo.setEditable(True)
+        player_group = QGroupBox("🎯 Joueur ciblé (pour rencontre / issue / vitesse)")
+        player_form = QFormLayout()
+        refresh_players_btn = QPushButton("🔄")
+        refresh_players_btn.setFixedWidth(40)
+        refresh_players_btn.clicked.connect(self.load_players)
+        player_row = QHBoxLayout()
+        player_row.addWidget(self.player_combo, 1)
+        player_row.addWidget(refresh_players_btn)
+        player_form.addRow("Login :", player_row)
+        player_group.setLayout(player_form)
+        layout.addWidget(player_group)
+
+        layout.addWidget(self._build_lieu_group())
+        layout.addWidget(self._build_rencontre_group())
+        layout.addWidget(self._build_vitesse_group())
+        layout.addWidget(self._build_diagnostic_group())
+
+        self.display_area = QTextEdit()
+        self.display_area.setReadOnly(True)
+        self.display_area.setMinimumHeight(100)
+        layout.addWidget(self.display_area)
+
+        layout.addWidget(self._build_blocklist_group())
+        layout.addWidget(self._build_reset_group())
+        layout.addStretch()
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+    def _build_lieu_group(self):
+        group = QGroupBox("🏛️ Créer un Lieu de Résonance")
+        form = QFormLayout()
+        self.lieu_x = QSpinBox()
+        self.lieu_x.setRange(0, 99)
+        self.lieu_y = QSpinBox()
+        self.lieu_y.setRange(0, 99)
+        xy_row = QHBoxLayout()
+        xy_row.addWidget(QLabel("x ="))
+        xy_row.addWidget(self.lieu_x)
+        xy_row.addWidget(QLabel("y ="))
+        xy_row.addWidget(self.lieu_y)
+        form.addRow("Case :", xy_row)
+        self.lieu_qualite_combo = QComboBox()
+        form.addRow("Qualité :", self.lieu_qualite_combo)
+        btn = QPushButton("🏛️ Créer")
+        btn.clicked.connect(self.do_lieu)
+        form.addRow("", btn)
+        group.setLayout(form)
+        return group
+
+    def _build_rencontre_group(self):
+        group = QGroupBox("🎲 Provoquer une rencontre / Forcer l'issue")
+        form = QFormLayout()
+        self.rencontre_biome_combo = QComboBox()
+        form.addRow("Biome :", self.rencontre_biome_combo)
+        self.rencontre_multi = QDoubleSpinBox()
+        self.rencontre_multi.setRange(0.1, 100.0)
+        self.rencontre_multi.setValue(1.0)
+        form.addRow("Multiplicateur phénomène :", self.rencontre_multi)
+        rencontre_btn = QPushButton("🎲 Provoquer la rencontre")
+        rencontre_btn.clicked.connect(self.do_rencontre)
+        form.addRow("", rencontre_btn)
+
+        self.issue_combo = QComboBox()
+        form.addRow("Issue de Résonance :", self.issue_combo)
+        issue_btn = QPushButton("🎯 Forcer l'issue")
+        issue_btn.clicked.connect(self.do_issue)
+        form.addRow("", issue_btn)
+        group.setLayout(form)
+        return group
+
+    def _build_vitesse_group(self):
+        group = QGroupBox("⏱️ Vitesse de test")
+        layout = QHBoxLayout()
+        on_btn = QPushButton("⏱️ ON")
+        on_btn.clicked.connect(lambda: self.do_vitesse("on"))
+        off_btn = QPushButton("⏱️ OFF")
+        off_btn.clicked.connect(lambda: self.do_vitesse("off"))
+        status_btn = QPushButton("📋 Qui est accéléré ?")
+        status_btn.clicked.connect(self.do_vitesse_status)
+        layout.addWidget(on_btn)
+        layout.addWidget(off_btn)
+        layout.addWidget(status_btn)
+        group.setLayout(layout)
+        return group
+
+    def _build_diagnostic_group(self):
+        group = QGroupBox("🩺 Diagnostic salon Discord")
+        layout = QHBoxLayout()
+        btn = QPushButton("🩺 Lancer le diagnostic (poste un message d'essai)")
+        btn.clicked.connect(self.do_diagnostic)
+        layout.addWidget(btn)
+        group.setLayout(layout)
+        return group
+
+    def _build_blocklist_group(self):
+        group = QGroupBox("🚫 Blocklist de modération des noms")
+        layout = QVBoxLayout()
+        list_row = QHBoxLayout()
+        self.blocklist_list = QListWidget()
+        self.blocklist_list.setMaximumHeight(120)
+        list_row.addWidget(self.blocklist_list, 1)
+        retirer_btn = QPushButton("✅ Retirer la sélection")
+        retirer_btn.clicked.connect(self.do_moderation_retirer)
+        list_row.addWidget(retirer_btn)
+        layout.addLayout(list_row)
+
+        form = QFormLayout()
+        self.bloc_code = QLineEdit()
+        self.bloc_code.setPlaceholderText("Code de l'entrée")
+        form.addRow("Code :", self.bloc_code)
+        self.bloc_motif = QLineEdit()
+        self.bloc_motif.setPlaceholderText("Motif interdit")
+        form.addRow("Motif :", self.bloc_motif)
+        self.bloc_correspondance_combo = QComboBox()
+        form.addRow("Correspondance :", self.bloc_correspondance_combo)
+        self.bloc_locale = QLineEdit()
+        self.bloc_locale.setPlaceholderText("optionnel, ex: fr")
+        form.addRow("Locale :", self.bloc_locale)
+        ajouter_btn = QPushButton("🚫 Ajouter à la blocklist")
+        ajouter_btn.clicked.connect(self.do_moderation_ajouter)
+        form.addRow("", ajouter_btn)
+        layout.addLayout(form)
+        group.setLayout(layout)
+        return group
+
+    def _build_reset_group(self):
+        group = QGroupBox("🧨 Reset général (DESTRUCTEUR)")
+        layout = QVBoxLayout()
+        warn = QLabel("⚠️ Efface la progression Échos de TOUS les joueurs. Irréversible.")
+        warn.setStyleSheet("color: #ff6b6b; font-weight: bold;")
+        layout.addWidget(warn)
+        btn = QPushButton("🧨 Reset général")
+        btn.setStyleSheet("background-color: #da3633;")
+        btn.clicked.connect(self.do_reset_general)
+        layout.addWidget(btn)
+        group.setLayout(layout)
+        return group
+
+    # --- Chargement ---
+
+    def load_choices(self):
+        data = self.api_client.echo_get_choices()
+        if not _echo_result_ok(self, data, quiet=True):
+            return
+        self.qualite_choices = [(c["value"], c["label"]) for c in data.get("qualite", [])]
+        self.biome_choices = [(c["value"], c["label"]) for c in data.get("biome", [])]
+        self.outcome_choices = [(c["value"], c["label"]) for c in data.get("issue_resonance", [])]
+        self.correspondance_choices = [(c["value"], c["label"]) for c in data.get("correspondance", [])]
+        self._fill_combo(self.lieu_qualite_combo, self.qualite_choices)
+        self._fill_combo(self.rencontre_biome_combo, self.biome_choices)
+        self._fill_combo(self.issue_combo, self.outcome_choices)
+        self._fill_combo(self.bloc_correspondance_combo, self.correspondance_choices)
+
+    def _fill_combo(self, combo, choices):
+        combo.clear()
+        for value, label in choices:
+            combo.addItem(label, value)
+
+    def load_players(self):
+        data = self.api_client.echo_get_players()
+        if not _echo_result_ok(self, data, quiet=True):
+            return
+        current = self.player_combo.currentText()
+        self.player_combo.blockSignals(True)
+        self.player_combo.clear()
+        self.player_combo.addItems(data.get("players", []))
+        self.player_combo.setCurrentText(current)
+        self.player_combo.blockSignals(False)
+
+    def load_blocklist(self):
+        data = self.api_client.echo_get_blocklist(include_inactive=True)
+        if not _echo_result_ok(self, data, quiet=True):
+            return
+        self.blocklist_list.clear()
+        for entry in data.get("entries", []):
+            state = "" if entry.get("is_active", True) else " (inactive)"
+            item = QListWidgetItem(f"{entry['entry_code']} — {entry['pattern']} ({entry['match_kind']}){state}")
+            item.setData(Qt.UserRole, entry["entry_code"])
+            self.blocklist_list.addItem(item)
+
+    def _current_login(self):
+        login = self.player_combo.currentText().strip()
+        if not login:
+            QMessageBox.warning(self, "Erreur", "Sélectionne ou saisis un joueur")
+            return None
+        return login
+
+    # --- Actions ---
+
+    def do_lieu(self):
+        qualite = self.lieu_qualite_combo.currentData()
+        result = self.api_client.echo_lieu(self.lieu_x.value(), self.lieu_y.value(), qualite)
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_rencontre(self):
+        login = self._current_login()
+        if not login:
+            return
+        biome = self.rencontre_biome_combo.currentData()
+        result = self.api_client.echo_rencontre(login, biome, self.rencontre_multi.value())
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_issue(self):
+        login = self._current_login()
+        if not login:
+            return
+        outcome = self.issue_combo.currentData()
+        result = self.api_client.echo_issue(login, outcome)
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_vitesse(self, etat):
+        login = self._current_login()
+        if not login:
+            return
+        result = self.api_client.echo_vitesse(login, etat)
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_vitesse_status(self):
+        result = self.api_client.echo_get_vitesse_status()
+        if _echo_result_ok(self, result):
+            self.display_area.setPlainText(result.get("message", "(personne)"))
+
+    def do_diagnostic(self):
+        result = self.api_client.echo_diagnostic_salon()
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+    def do_moderation_ajouter(self):
+        code = self.bloc_code.text().strip()
+        motif = self.bloc_motif.text().strip()
+        if not code or not motif:
+            QMessageBox.warning(self, "Erreur", "Code et motif sont obligatoires")
+            return
+        correspondance = self.bloc_correspondance_combo.currentData() or "substring"
+        locale = self.bloc_locale.text().strip() or None
+        result = self.api_client.echo_moderation_ajouter(code, motif, correspondance, locale)
+        ok, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+        if ok:
+            self.bloc_code.clear()
+            self.bloc_motif.clear()
+            self.bloc_locale.clear()
+            self.load_blocklist()
+
+    def do_moderation_retirer(self):
+        item = self.blocklist_list.currentItem()
+        if not item:
+            QMessageBox.warning(self, "Erreur", "Sélectionne une entrée de la blocklist")
+            return
+        code = item.data(Qt.UserRole)
+        result = self.api_client.echo_moderation_retirer(code)
+        ok, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+        if ok:
+            self.load_blocklist()
+
+    def do_reset_general(self):
+        reply = QMessageBox.question(
+            self, "⚠️ Confirmation (1/2)",
+            "Ceci efface la progression Échos de TOUS les joueurs. Continuer ?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        reply2 = QMessageBox.question(
+            self, "🧨 Confirmation finale (2/2)",
+            "Dernière chance : cette action est IRRÉVERSIBLE. Vraiment tout réinitialiser ?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply2 != QMessageBox.Yes:
+            return
+        result = self.api_client.echo_reset_general()
+        _, message = _echo_action_ok(self, result)
+        self.display_area.setPlainText(message)
+
+
+def _build_sortable_table(columns):
+    table = QTableWidget()
+    table.setColumnCount(len(columns))
+    table.setHorizontalHeaderLabels(columns)
+    table.setSortingEnabled(True)
+    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    table.setSelectionBehavior(QAbstractItemView.SelectRows)
+    table.horizontalHeader().setStretchLastSection(True)
+    return table
+
+
+class EchosRencontresTab(QWidget):
+    """Rencontres — actives (temps réel) et résolues (Phase 120f : journalisées
+    par `archive_encounter` au moment de la résolution, puisque
+    `echo_active_encounters` perd la ligne dès qu'une rencontre est tranchée)."""
+
+    _ACTIVE_COLUMNS = ("Joueur", "Espèce", "Famille", "Rareté", "Improbable", "Camp",
+                        "Biome", "Créée le", "Expire le", "Temps restant")
+    _ACTIVE_COL_EXPIRES_AT = 8
+    _ACTIVE_COL_COUNTDOWN = 9
+
+    _HISTORY_COLUMNS = ("Joueur", "Espèce", "Famille", "Rareté", "Improbable", "Camp",
+                        "Biome", "Issue", "Détail", "Créée le", "Résolue le")
+
+    def __init__(self, api_client):
+        super().__init__()
+        self.api_client = api_client
+        self.init_ui()
+        self.load_encounters()
+        self.load_history()
+        self._countdown_timer = QTimer(self)
+        self._countdown_timer.timeout.connect(self._tick_countdowns)
+        self._countdown_timer.start(1000)
+
+    def init_ui(self):
+        outer = QVBoxLayout(self)
+        title = QLabel("🎲 ÉCHOS — RENCONTRES")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffd700;")
+        outer.addWidget(title)
+
+        inner_tabs = QTabWidget()
+
+        active_widget = QWidget()
+        active_layout = QVBoxLayout(active_widget)
+        active_header = QHBoxLayout()
+        self.active_status_label = QLabel("")
+        self.active_status_label.setStyleSheet("color: #8b949e;")
+        active_header.addWidget(self.active_status_label)
+        active_header.addStretch()
+        active_refresh_btn = QPushButton("🔄 Actualiser")
+        active_refresh_btn.clicked.connect(self.load_encounters)
+        active_header.addWidget(active_refresh_btn)
+        active_layout.addLayout(active_header)
+        self.active_table = _build_sortable_table(self._ACTIVE_COLUMNS)
+        active_layout.addWidget(self.active_table)
+        inner_tabs.addTab(active_widget, "🟢 Actives")
+
+        history_widget = QWidget()
+        history_layout = QVBoxLayout(history_widget)
+        history_header = QHBoxLayout()
+        self.history_status_label = QLabel("")
+        self.history_status_label.setStyleSheet("color: #8b949e;")
+        history_header.addWidget(self.history_status_label)
+        history_header.addStretch()
+        history_refresh_btn = QPushButton("🔄 Actualiser")
+        history_refresh_btn.clicked.connect(self.load_history)
+        history_header.addWidget(history_refresh_btn)
+        history_layout.addLayout(history_header)
+        self.history_table = _build_sortable_table(self._HISTORY_COLUMNS)
+        history_layout.addWidget(self.history_table)
+        inner_tabs.addTab(history_widget, "📜 Historique")
+
+        outer.addWidget(inner_tabs)
+
+    def load_encounters(self):
+        data = self.api_client.echo_get_active_encounters()
+        if not _echo_result_ok(self, data, quiet=True):
+            self.active_status_label.setText("⚠️ Chargement impossible (voir console)")
+            return
+        encounters = data.get("encounters", [])
+        self.active_status_label.setText(f"{len(encounters)} rencontre(s) active(s)")
+
+        table = self.active_table
+        table.setSortingEnabled(False)
+        table.setRowCount(len(encounters))
+        for row, e in enumerate(encounters):
+            created_at = _parse_iso_datetime(e.get("created_at"))
+            expires_at = _parse_iso_datetime(e.get("expires_at"))
+            plain_values = (
+                e.get("twitch_login", ""),
+                e.get("species_code", ""),
+                e.get("family_code", ""),
+                e.get("rarity", ""),
+                "Oui" if e.get("is_improbable") else "Non",
+                "Oui" if e.get("is_camp") else "Non",
+                e.get("biome_code") or "—",
+            )
+            for col, value in enumerate(plain_values):
+                table.setItem(row, col, QTableWidgetItem(value))
+            table.setItem(row, 7, _SortableItem(_format_paris(created_at), created_at))
+            table.setItem(row, self._ACTIVE_COL_EXPIRES_AT, _SortableItem(_format_paris(expires_at), expires_at))
+            seconds_left = (expires_at - datetime.now(timezone.utc)).total_seconds() if expires_at else None
+            table.setItem(row, self._ACTIVE_COL_COUNTDOWN,
+                          _SortableItem(_format_countdown(expires_at), seconds_left))
+        table.setSortingEnabled(True)
+        table.resizeColumnsToContents()
+
+    def load_history(self):
+        data = self.api_client.echo_get_encounter_history()
+        if not _echo_result_ok(self, data, quiet=True):
+            self.history_status_label.setText("⚠️ Chargement impossible (voir console)")
+            return
+        history = data.get("history", [])
+        self.history_status_label.setText(f"{len(history)} rencontre(s) résolue(s) (500 derniers max)")
+
+        table = self.history_table
+        table.setSortingEnabled(False)
+        table.setRowCount(len(history))
+        _OUTCOME_LABELS = {"accepted": "✅ Acceptée", "refused": "❌ Refusée",
+                            "ignored": "🙈 Ignorée", "expired": "⏰ Expirée"}
+        for row, h in enumerate(history):
+            created_at = _parse_iso_datetime(h.get("created_at"))
+            resolved_at = _parse_iso_datetime(h.get("resolved_at"))
+            plain_values = (
+                h.get("twitch_login", ""),
+                h.get("species_code", ""),
+                h.get("family_code", ""),
+                h.get("rarity", ""),
+                "Oui" if h.get("is_improbable") else "Non",
+                "Oui" if h.get("is_camp") else "Non",
+                h.get("biome_code") or "—",
+                _OUTCOME_LABELS.get(h.get("outcome"), h.get("outcome") or "—"),
+                h.get("detail") or "—",
+            )
+            for col, value in enumerate(plain_values):
+                table.setItem(row, col, QTableWidgetItem(value))
+            table.setItem(row, 9, _SortableItem(_format_paris(created_at), created_at))
+            table.setItem(row, 10, _SortableItem(_format_paris(resolved_at), resolved_at))
+        table.setSortingEnabled(True)
+        table.resizeColumnsToContents()
+
+    def _tick_countdowns(self):
+        """Recalcule juste la colonne "Temps restant" des rencontres actives,
+        chaque seconde, sans refaire d'appel réseau."""
+        table = self.active_table
+        if table.rowCount() == 0:
+            return
+        was_sorting = table.isSortingEnabled()
+        table.setSortingEnabled(False)
+        for row in range(table.rowCount()):
+            item = table.item(row, self._ACTIVE_COL_EXPIRES_AT)
+            expires_at = getattr(item, "sort_key", None) if item else None
+            cell = table.item(row, self._ACTIVE_COL_COUNTDOWN)
+            if cell is None:
+                continue
+            seconds_left = (expires_at - datetime.now(timezone.utc)).total_seconds() if expires_at else None
+            cell.setText(_format_countdown(expires_at))
+            cell.sort_key = seconds_left
+        table.setSortingEnabled(was_sorting)
+
+
+class ComptesSupprimesTab(QWidget):
+    """Résurrection de comptes supprimés — /admin/deleted-players* (déjà
+    existant côté backend, pas spécifique aux Échos : un compte supprimé
+    peut être ressuscité indépendamment d'avoir jamais eu un Écho)."""
+
+    def __init__(self, api_client):
+        super().__init__()
+        self.api_client = api_client
+        self.current_archive_id = None
+        self.init_ui()
+        self.load_archives()
+
+    def init_ui(self):
+        outer = QVBoxLayout(self)
+        title = QLabel("♻️ COMPTES SUPPRIMÉS")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffd700;")
+        outer.addWidget(title)
+
+        header = QHBoxLayout()
+        self.include_restored_check = QCheckBox("Inclure les comptes déjà ressuscités")
+        self.include_restored_check.stateChanged.connect(self.load_archives)
+        header.addWidget(self.include_restored_check)
+        header.addStretch()
+        refresh_btn = QPushButton("🔄 Actualiser")
+        refresh_btn.clicked.connect(self.load_archives)
+        header.addWidget(refresh_btn)
+        outer.addLayout(header)
+
+        main_row = QHBoxLayout()
+        self.archive_list = QListWidget()
+        self.archive_list.itemClicked.connect(self.show_archive_detail)
+        main_row.addWidget(self.archive_list, 1)
+
+        detail_col = QVBoxLayout()
+        self.detail_area = QTextEdit()
+        self.detail_area.setReadOnly(True)
+        self.detail_area.setMinimumHeight(200)
+        detail_col.addWidget(self.detail_area)
+
+        self.restore_btn = QPushButton("🧟 Ressusciter ce compte")
+        self.restore_btn.setEnabled(False)
+        self.restore_btn.setStyleSheet("background-color: #da3633;")
+        self.restore_btn.clicked.connect(self.do_restore)
+        detail_col.addWidget(self.restore_btn)
+        main_row.addLayout(detail_col, 1)
+
+        outer.addLayout(main_row)
+
+    _REASON_LABELS = {
+        'inactivity_4w': "inactivité (4 semaines)",
+        'manual': "suppression manuelle",
+        'manual_reconstruction': "reconstruction manuelle (sans archive)",
+    }
+
+    def load_archives(self):
+        data = self.api_client.get_deleted_players(self.include_restored_check.isChecked())
+        if not _echo_result_ok(self, data, quiet=True):
+            return
+        self.archive_list.clear()
+        for a in data.get("archives", []):
+            restored = " ✅ ressuscité" if a.get("restored_at") else ""
+            label = (f"#{a['id']} — {a['twitch_login']} "
+                     f"(Niv.{a.get('niveau_at_deletion', '?')}, {a.get('item_count', 0)} objets)"
+                     f"{restored}")
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, a)
+            self.archive_list.addItem(item)
+
+    def show_archive_detail(self, item):
+        a = item.data(Qt.UserRole)
+        self.current_archive_id = a["id"]
+        reason = self._REASON_LABELS.get(a.get("deleted_reason"), a.get("deleted_reason"))
+        lines = [
+            f"Login : {a['twitch_login']} ({a.get('display_name') or 'sans nom'})",
+            f"Archive #{a['id']}",
+            f"Supprimé le : {a.get('deleted_at')}",
+            f"Raison : {reason}",
+            f"Dernière activité : {a.get('last_activity_at')}",
+            f"Niveau à la suppression : {a.get('niveau_at_deletion', '?')}",
+            f"XP à la suppression : {a.get('xp_at_deletion', '?')}",
+            f"Objets dans l'archive : {a.get('item_count', 0)}",
+        ]
+        if a.get("restored_at"):
+            lines.append(f"\n✅ Déjà ressuscité le {a['restored_at']} par {a.get('restored_by')}"
+                          f" (vers {a.get('restored_to_login')})")
+            self.restore_btn.setEnabled(False)
+        else:
+            self.restore_btn.setEnabled(True)
+        self.detail_area.setPlainText("\n".join(lines))
+
+    def do_restore(self):
+        if not self.current_archive_id:
+            return
+        reply = QMessageBox.question(
+            self, "⚠️ Confirmation (1/2)",
+            "Ressusciter ce compte va recréer le joueur avec son inventaire et poster "
+            "une annonce publique sur Discord. Continuer ?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        reply2 = QMessageBox.question(
+            self, "🧟 Confirmation finale (2/2)",
+            "Dernière chance avant la résurrection (et l'annonce publique). Confirmer ?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply2 != QMessageBox.Yes:
+            return
+        result = self.api_client.restore_deleted_player(self.current_archive_id)
+        if _echo_result_ok(self, result, "Compte ressuscité."):
+            self.load_archives()
+            self.detail_area.append(f"\n\n✅ Restauré : {result.get('items_restored', 0)} objet(s) rendus"
+                                     + (f", {len(result.get('items_skipped', []))} ignoré(s)"
+                                        if result.get('items_skipped') else ""))
+
+
 # Section 9: Fenêtre principale améliorée
 class StreamQuestAdmin(QMainWindow):
     """Fenêtre principale de l'administration StreamQuest"""
@@ -7624,11 +9185,13 @@ class StreamQuestAdmin(QMainWindow):
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
             print(f"Icône chargée depuis : {icon_path}")
-            # FORCER LE RAFRAÎCHISSEMENT DE LA FENÊTRE
-            self.refresh_window_icon()
         else:
             print(f"❌ Icône non trouvée à : {icon_path}")
-    
+        # La construction de l'UI (onglets, barre de titre, menu...) ne doit
+        # pas dépendre de la présence de l'icône — sans quoi toute l'appli
+        # reste une fenêtre vide et plante au premier check_session() différé.
+        self.refresh_window_icon()
+
     def refresh_window_icon(self):
         """Force le rafraîchissement de l'icône dans la barre des tâches Windows"""
         # Méthode 1: Cacher et remontrer la fenêtre
@@ -7713,6 +9276,11 @@ class StreamQuestAdmin(QMainWindow):
         self.coffre_tab = CoffreTab(self.api_client)
         self.items_tab = ItemsTab(self.api_client)
         self.item_effects_tab = ItemEffectsTab(self.api_client)
+        self.echos_joueurs_tab = EchosJoueursTab(self.api_client)
+        self.echos_catalogue_tab = EchosCatalogueTab(self.api_client)
+        self.echos_monde_tab = EchosMondeTab(self.api_client)
+        self.echos_rencontres_tab = EchosRencontresTab(self.api_client)
+        self.comptes_supprimes_tab = ComptesSupprimesTab(self.api_client)
 
         self.tabs.addTab(self.session_tab, "🔐 Session")
         self.tabs.addTab(self.lore_tab, "📖 Lore")
@@ -7723,7 +9291,12 @@ class StreamQuestAdmin(QMainWindow):
         self.tabs.addTab(self.item_effects_tab, "⚡ Effets Items")
         self.tabs.addTab(self.coffre_tab, "🏰 Coffre")
         self.tabs.addTab(self.overlay_tab, "🎬 Overlay")
-        
+        self.tabs.addTab(self.echos_joueurs_tab, "🐣 Échos — Joueurs")
+        self.tabs.addTab(self.echos_catalogue_tab, "📚 Échos — Catalogue")
+        self.tabs.addTab(self.echos_monde_tab, "🌍 Échos — Monde")
+        self.tabs.addTab(self.echos_rencontres_tab, "🎲 Échos — Rencontres")
+        self.tabs.addTab(self.comptes_supprimes_tab, "♻️ Comptes supprimés")
+
 
         main_layout.addWidget(self.tabs)
 
@@ -7786,8 +9359,30 @@ class StreamQuestAdmin(QMainWindow):
             login = user_info.get("twitch_login", "Inconnu")
             self.session_info.setText(f"👤 Connecté en tant que {login}")
             self.start_sse()
+            self._refresh_echo_tabs()
         else:
             self.session_info.setText("Non authentifié")
+
+    def _refresh_echo_tabs(self):
+        """Les onglets Échos (et Comptes supprimés) chargent leurs listes à la
+        construction, dans init_ui() — donc AVANT que setup_connections() n'ait
+        eu la chance d'appeler load_cookies() et de poser le JWT. Résultat :
+        dropdowns vides au premier lancement même avec une session valide déjà
+        enregistrée (ex: le biome de "Provoquer une rencontre"). On recharge
+        une fois la session confirmée, ici et après un login OAuth frais
+        (check_session est aussi appelé par on_auth_result)."""
+        try:
+            self.echos_joueurs_tab.load_choices()
+            self.echos_joueurs_tab.load_players()
+            self.echos_catalogue_tab.load_species_list()
+            self.echos_monde_tab.load_choices()
+            self.echos_monde_tab.load_players()
+            self.echos_monde_tab.load_blocklist()
+            self.echos_rencontres_tab.load_encounters()
+            self.echos_rencontres_tab.load_history()
+            self.comptes_supprimes_tab.load_archives()
+        except Exception as e:
+            print(f"❌ Erreur rafraîchissement onglets Échos: {e}")
 
     def login_twitch(self):
         self.api_client.login_twitch()
